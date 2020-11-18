@@ -8,8 +8,6 @@ import numpy  as np
 import matplotlib.pyplot as plt
 import s3fs
 import xarray as xr
-import xarray.plot as xplt
-
 
 from itslive import itslive_ui
 
@@ -94,7 +92,7 @@ class ITSCube:
         params['polygon'] = ",".join([str(each) for each in self.polygon_coords])
 
         found_urls = [each['url'] for each in itslive_ui.get_granule_urls(params)]
-        print("Originally found urls: ", len(found_urls))
+        print("Number of originally found urls: ", len(found_urls))
 
         if len(found_urls) == 0:
             print(f"No granules are found for the search API parameters: {params}")
@@ -192,13 +190,12 @@ class ITSCube:
                     skipped_empty_granules.append(cube_v.attrs['url'])
 
                 else:
-                    skipped_proj_granules.setdefault(int(each_ds.UTM_Projection.spatial_epsg), []).append(cube_v.attrs['url'])
+                    skipped_proj_granules.setdefault(int(cube_v.attrs['epsg']), []).append(cube_v.attrs['url'])
 
         self.combine_layers()
         ITSCube.format_stats(skipped_proj_granules, skipped_empty_granules, len(found_urls))
 
         return found_urls, skipped_proj_granules
-
 
     def create_from_local(self, dirpath='data'):
         """
@@ -233,16 +230,59 @@ class ITSCube:
 
                 else:
                     if is_empty:
-                         skipped_empty_granules.append(each_url)
+                        skipped_empty_granules.append(each_url)
 
                     else:
-                        skipped_proj_granules.setdefault(int(ds.UTM_Projection.spatial_epsg), []).append(each_url)
+                        skipped_proj_granules.setdefault(int(cube_v.attrs['epsg']), []).append(each_url)
 
         self.combine_layers()
         ITSCube.format_stats(skipped_proj_granules, skipped_empty_granules, len(found_urls))
 
         return found_urls, skipped_proj_granules
 
+    def create_from_local_parallel(self, dirpath='data'):
+        """
+        Create velocity cube from local data in parallel.
+
+        api_params: dict
+            Search API required parameters.
+        num: int
+            Number of first granules to examine.
+            TODO: This is a temporary solution to a very long time to open remote granules. Should not be used
+                  when running the code at AWS.
+        """
+        # Re-set filtered velocities
+        self.velocities = {}
+        self.layers = None
+
+        # Keep track of skipped granules due to the other than target projection
+        skipped_proj_granules = {}
+        # Keep track of skipped granules due to the no data for the polygon of interest
+        skipped_empty_granules = []
+
+        found_urls = glob.glob(dirpath + os.sep + '*.nc')
+
+        tasks = [dask.delayed(self.read_dataset)(each_file) for each_file in found_urls]
+        results = dask.compute(tasks, scheduler='threads', num_workers=8)
+
+        for each_ds in results[0]:
+            cube_v, is_empty = each_ds
+
+            if cube_v is not None:
+                # There can be multiple layers for the mid_date, collect all
+                self.velocities.setdefault(cube_v.coords['mid_date'].values, []).append(cube_v)
+
+            else:
+                if is_empty:
+                    skipped_empty_granules.append(cube_v.attrs['url'])
+
+                else:
+                    skipped_proj_granules.setdefault(int(cube_v.attrs['epsg']), []).append(cube_v.attrs['url'])
+
+        self.combine_layers()
+        ITSCube.format_stats(skipped_proj_granules, skipped_empty_granules, len(found_urls))
+
+        return found_urls, skipped_proj_granules
 
     def preprocess_dataset(self, ds: xr.Dataset, ds_url: str):
         """
@@ -287,12 +327,12 @@ class ITSCube:
 
                 # Add file URL as its source for traceability
                 cube_v.attrs['url'] = ds_url
+                cube_v.attrs['epsg'] = ds.UTM_Projection.spatial_epsg
 
             else:
                 empty = True
 
         return cube_v, empty
-
 
     def combine_layers(self):
         """
@@ -319,9 +359,8 @@ class ITSCube:
         # No need for collected velocities pairs anymore
 #         self.velocities = None
 
-
     @staticmethod
-    def format_stats(skipped_proj_granules, skipped_empty_granules, num_urls):
+    def format_stats(skipped_proj_granules: dict, skipped_empty_granules: dict, num_urls: int):
 
         # Total number of skipped granules due to wrong projection
         sum_projs = sum([len(each) for each in skipped_proj_granules.values()])
@@ -330,61 +369,14 @@ class ITSCube:
         print(f"      empty data: {len(skipped_empty_granules)} ({100.0 * len(skipped_empty_granules)/num_urls}%)")
         print(f"      wrong proj: {sum_projs} ({100.0 * sum_projs/num_urls}%)")
 
-
-    def create_from_local_parallel(self, dirpath='data'):
-        """
-        Create velocity cube from local data in parallel.
-
-        api_params: dict
-            Search API required parameters.
-        num: int
-            Number of first granules to examine.
-            TODO: This is a temporary solution to a very long time to open remote granules. Should not be used
-                  when running the code at AWS.
-        """
-        # Re-set filtered velocities
-        self.velocities = {}
-        self.layers = None
-
-        # Keep track of skipped granules due to the other than target projection
-        skipped_proj_granules = {}
-        # Keep track of skipped granules due to the no data for the polygon of interest
-        skipped_empty_granules = []
-
-        found_urls = glob.glob(dirpath + os.sep + '*.nc')
-
-        tasks = [dask.delayed(self.read_dataset)(each_file) for each_file in found_urls]
-        results = dask.compute(tasks, scheduler='threads', num_workers=8)
-
-        for each_ds in results[0]:
-            cube_v, is_empty = each_ds
-
-            if cube_v is not None:
-                    # There can be multiple layers for the mid_date, collect all
-                    self.velocities.setdefault(cube_v.coords['mid_date'].values, []).append(cube_v)
-
-            else:
-                if is_empty:
-                     skipped_empty_granules.append(each_url)
-
-                else:
-                    skipped_proj_granules.setdefault(int(ds.UTM_Projection.spatial_epsg), []).append(each_url)
-
-        self.combine_layers()
-        ITSCube.format_stats(skipped_proj_granules, skipped_empty_granules, len(found_urls))
-
-        return found_urls, skipped_proj_granules
-
-
-    def read_dataset(self, url):
+    def read_dataset(self, url: str):
         """
         Read Dataset from the file and pre-process for the cube layer.
         """
         with xr.open_dataset(url) as ds:
             return self.preprocess_dataset(ds, url)
 
-
-    def read_s3_dataset(self, each_url, s3):
+    def read_s3_dataset(self, each_url: str, s3):
         """
         Read Dataset from the S3 bucket and pre-process for the cube layer.
         """
@@ -394,7 +386,6 @@ class ITSCube:
         with s3.open(s3_path, mode='rb') as fhandle:
             with xr.open_dataset(fhandle, engine=ITSCube.NC_ENGINE) as ds:
                 return self.preprocess_dataset(ds, each_url)
-
 
     def plot_layers(self):
         """
@@ -410,10 +401,10 @@ class ITSCube:
         if (num_granules % num_cols) != 0:
             num_rows += 1
 
-        fig, axes = plt.subplots(ncols=num_cols, nrows=num_rows, figsize=(num_cols*4, num_rows*4))
+        _, axes = plt.subplots(ncols=num_cols, nrows=num_rows, figsize=(num_cols*4, num_rows*4))
         col_index = 0
         row_index = 0
-        for each_index, each_date in enumerate(sorted(self.velocities.keys())):
+        for each_date in sorted(self.velocities.keys()):
             if col_index == num_cols:
                 col_index = 0
                 row_index += 1
@@ -430,17 +421,12 @@ class ITSCube:
         plt.tight_layout()
         plt.draw()
 
-
-    def plot_num_layers(self, num):
+    def plot_num_layers(self, num: int):
         """
         Plot specified number of first cube's velocities in date order. Each layer has its own x/y coordinate labels based on data values
         present in the layer. This method provides a better insight into data variation within each layer.
         """
-        num_granules = sum([len(each) for each in self.velocities.values()])
-#         num_granules = len(self.velocities)
-
-        fig, axes = plt.subplots(ncols=num, figsize=(num*4, 4))
-        col_index = 0
+        _, axes = plt.subplots(ncols=num, figsize=(num*4, 4))
         num_index = 0
         for each_date in sorted(self.velocities.keys()):
             if num_index == num:
@@ -454,13 +440,11 @@ class ITSCube:
         plt.tight_layout()
         plt.draw()
 
-
-
     def plot(self):
         """
         Plot cube's layers in date order. All layers share the same x/y coordinate labels.
         """
         # Does not work now: can't use non-unique faceted values for plotting (mid_date)
         # self.layers.plot(x='x', y = 'y', col='mid_date', col_wrap=5, levels=100)
-        
+
         print("Not supported anymore since xarray can't use non-unique faceted values (mid_date) for plotting ")
