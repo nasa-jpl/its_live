@@ -1,0 +1,32 @@
+name: itscube
+
+channels:
+- conda-forge
+
+dependencies:
+- python=3.8
+- joblib
+- matplotlib-base
+- dask
+#- python-graphviz
+- ipyleaflet
+- pandas
+- shapely
+#- geopandas
+- h5py
+- h5netcdf
+- requests
+- pyproj
+- xarray
+- netcdf4
+- flake8
+- nodejs
+- jupyterlab
+- jupyter_contrib_nbextensions
+- pip
+- pip:
+  - area
+  - git+git://github.com/icesat2py/icepyx@development
+  - python-cmr
+- s3fs
+- utm
