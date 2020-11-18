@@ -1,3 +1,14 @@
+#
+# Configuration file to create conda environment to run ITSCube related code.
+#
+# To create conda environment, run command:
+#
+# $ conda env create -f cube_environment.yml
+#
+# Followed by the following command to activate the environment:
+#
+# $ conda activate itscube
+#
 name: itscube
 
 channels:
@@ -8,11 +19,9 @@ dependencies:
 - joblib
 - matplotlib-base
 - dask
-#- python-graphviz
-- ipyleaflet
+#- python-graphviz # Dask visualizer - requires python3.6
 - pandas
 - shapely
-#- geopandas
 - h5py
 - h5netcdf
 - requests
@@ -23,10 +32,12 @@ dependencies:
 - nodejs
 - jupyterlab
 - jupyter_contrib_nbextensions
+- jupyter_nbextensions_configurator
+- ipyleaflet
+- s3fs
+- utm
 - pip
 - pip:
   - area
   - git+git://github.com/icesat2py/icepyx@development
   - python-cmr
-- s3fs
-- utm
