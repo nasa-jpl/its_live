@@ -10,6 +10,7 @@ import s3fs
 import xarray as xr
 
 from itslive import itslive_ui
+from grid import Bounds
 
 
 class ITSCube:
@@ -17,18 +18,6 @@ class ITSCube:
     Class to build ITS_LIVE cube: time series of velocity pairs within a
     polygon of interest.
     """
-
-    class Bounds:
-        """
-        Class to store min/max pair for a variable.
-        """
-        def __init__(self, values):
-            self.min = min(values)
-            self.max = max(values)
-
-        def __str__(self):
-            return f"min={self.min} max={self.max}"
-
     # String representation of longitude/latitude projection
     LON_LAT_PROJECTION = '4326'
 
@@ -52,8 +41,8 @@ class ITSCube:
         self.projection = projection
 
         # Set min/max x/y values to filter region by
-        self.x = ITSCube.Bounds([each[0] for each in polygon])
-        self.y = ITSCube.Bounds([each[1] for each in polygon])
+        self.x = Bounds([each[0] for each in polygon])
+        self.y = Bounds([each[1] for each in polygon])
 
         # Convert polygon from its target projection to longitude/latitude coordinates
         # which are used by granule search API
@@ -448,3 +437,32 @@ class ITSCube:
         # self.layers.plot(x='x', y = 'y', col='mid_date', col_wrap=5, levels=100)
 
         print("Not supported anymore since xarray can't use non-unique faceted values (mid_date) for plotting ")
+
+
+if __name__ == '__main__':
+    # Since port forwarding is not working on EC2 to run jupyter lab for now,
+    # allow to run test case from itscube.ipynb in standalone mode
+
+    # Create polygon as a square around the centroid in target '32628' UTM projection
+    # Projection for the polygon coordinates
+    projection = '32628'
+
+    # Centroid for the tile in target projection
+    c_x, c_y = (487462, 9016243)
+
+    # Offset in meters (1 pixel=240m): 100 km square (with offset=50km)
+    off = 50000
+    polygon = ((c_x - off, c_y + off), (c_x + off, c_y + off), (c_x + off, c_y - off), (c_x - off, c_y - off), (c_x - off, c_y + off))
+    print("Polygon: ", polygon)
+
+    # Create cube object
+    cube = ITSCube(polygon, projection)
+
+    # TODO: Should have them as separate input parameters for ITSCube.create()?
+    API_params = {
+        'start'               : '2010-01-05',
+        'end'                 : '2020-01-01',
+        'percent_valid_pixels': 1
+    }
+
+    found_urls, skipped_projs = cube.create(API_params, 100)
