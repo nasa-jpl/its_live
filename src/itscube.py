@@ -442,6 +442,8 @@ class ITSCube:
 if __name__ == '__main__':
     # Since port forwarding is not working on EC2 to run jupyter lab for now,
     # allow to run test case from itscube.ipynb in standalone mode
+    import warnings
+    warnings.filterwarnings('ignore')
 
     # Create polygon as a square around the centroid in target '32628' UTM projection
     # Projection for the polygon coordinates
@@ -465,4 +467,8 @@ if __name__ == '__main__':
         'percent_valid_pixels': 1
     }
 
-    found_urls, skipped_projs = cube.create(API_params, 100)
+    # Process ITS_LIVE granules sequentially, look at 100 first granules only
+    # found_urls, skipped_projs = cube.create(API_params, 100)
+
+    # Process ITS_LIVE granules in parallel, look at 100 first granules only
+    found_urls, skipped_projs = cube.create_parallel(API_params, 100)
