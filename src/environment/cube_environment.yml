@@ -35,6 +35,7 @@ dependencies:
 - jupyter_nbextensions_configurator
 - ipyleaflet
 - s3fs
+- tqdm
 - utm
 - pip
 - pip:
