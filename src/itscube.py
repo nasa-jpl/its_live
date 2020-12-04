@@ -24,6 +24,9 @@ class ITSCube:
     # Number of threads for parallel processing
     NUM_THREADS = 4
 
+    # Dask scheduler for parallel processing
+    DASK_SCHEDULER = "processes"
+    
     # String representation of longitude/latitude projection
     LON_LAT_PROJECTION = '4326'
 
@@ -35,10 +38,14 @@ class ITSCube:
     # S3 bucket location of the file is 's3://its-live-data.jpl.nasa.gov/velocity_image_pair/landsat/v00.0/32628/file.nc'
     PATH_URL = ".s3.amazonaws.com"
 
+    # Engine to read xarray data into from NetCDF file
     NC_ENGINE = 'h5netcdf'
 
+    
     def __init__(self, polygon: tuple, projection: str):
         """
+        Initialize object.
+        
         polygon: tuple
             Polygon for the tile.
         projection: str
@@ -69,23 +76,36 @@ class ITSCube:
         #    mid_date: velocity values
         self.velocities = {}
 
+        # Keep track of skipped granules due to the other than target projection
+        self.skipped_proj_granules = {}
+        # Keep track of skipped granules due to the no data for the polygon of interest
+        self.skipped_empty_granules = []
+
         # Constructed cube
         self.layers = None
 
-    def create(self, api_params: dict, num_granules=None):
+    def clear(self):
         """
-        Create velocity cube.
+        Reset all internal data structures.
+        """
+        self.velocities = {}
+        self.skipped_proj_granules = {}
+        self.skipped_empty_granules = []
+        self.layers = None
 
+        
+    def request_granules(self, api_params: dict, num_granules: int):
+        """
+        Send request to ITS_LIVE API to get a list of granules to satisfy polygon request.
+        
         api_params: dict
             Search API required parameters.
-        num: int
+        num_granules: int
             Number of first granules to examine.
             TODO: This is a temporary solution to a very long time to open remote granules.
                   Should not be used when running the code in production mode.
         """
-        # Re-set filtered velocities
-        self.velocities = {}
-
+        
         # Append polygon information to API's parameters
         params = copy.deepcopy(api_params)
         params['polygon'] = ",".join([str(each) for each in self.polygon_coords])
@@ -97,24 +117,36 @@ class ITSCube:
         print(f"Number of found by API granules: {total_num} (took {time_delta} seconds)")
 
         if len(found_urls) == 0:
-            print(f"No granules are found for the search API parameters: {params}")
-            return
+            raise RuntimeError(f"No granules are found for the search API parameters: {params}")
 
-        # Keep track of skipped granules due to the other than target projection
-        skipped_proj_granules = {}
-        # Keep track of skipped granules due to the no data for the polygon of interest
-        skipped_empty_granules = []
+        # Number of granules to examine is specified 
+        # TODO: just a workaround for now as it's very slow to examine all granules
+        #       sequentially at this point.
+        if num_granules:
+            found_urls = found_urls[:num_granules]
+            print(f"Examining only first {len(found_urls)} out of {total_num} found granules")
 
+        return found_urls
+
+    def create(self, api_params: dict, num_granules=None):
+        """
+        Create velocity cube.
+
+        api_params: dict
+            Search API required parameters.
+        num_granules: int
+            Number of first granules to examine.
+            TODO: This is a temporary solution to a very long time to open remote granules.
+                  Should not be used when running the code in production mode.
+        """
+        self.clear()
+
+        found_urls = self.request_granules(api_params, num_granules)
+        
         # Open S3FS access to S3 bucket with input granules
         s3 = s3fs.S3FileSystem(anon=True)
 
-        # Number of granules to examine is specified (it's very slow to examine
-        # all granules sequentially)
-        if num_granules:
-            found_urls = found_urls[:num_granules]
-            print(f"Examining only {len(found_urls)} first granules out of {total_num} found granules")
-
-        for each_url in tqdm(found_urls, ascii=True, desc='Processing S3 granules'):
+        for each_url in tqdm(found_urls, ascii=True, desc='Reading and processing S3 granules'):
             s3_path = each_url.replace(ITSCube.HTTP_PREFIX, ITSCube.S3_PREFIX)
             s3_path = s3_path.replace(ITSCube.PATH_URL, '')
 
@@ -129,21 +161,17 @@ class ITSCube:
 
                     else:
                         if is_empty:
-                            skipped_empty_granules.append(each_url)
+                            self.skipped_empty_granules.append(each_url)
 
                         else:
-                            skipped_proj_granules.setdefault(int(ds_projection), []).append(each_url)
+                            self.skipped_proj_granules.setdefault(int(ds_projection), []).append(each_url)
 
         self.combine_layers()
 
         # Report statistics for skipped granules
-        ITSCube.format_stats(
-            skipped_proj_granules,
-            skipped_empty_granules,
-            len(found_urls)
-        )
+        self.format_stats(len(found_urls))
 
-        return found_urls, skipped_proj_granules
+        return found_urls
 
     def create_parallel(self, api_params: dict, num_granules=None):
         """
@@ -156,49 +184,27 @@ class ITSCube:
             TODO: This is a temporary solution to a very long time to open remote granules. Should not be used
                   when running the code at AWS.
         """
-        # Re-set filtered velocities
-        self.velocities = {}
+        self.clear()
 
-        # Append polygon information to API's parameters
-        params = copy.deepcopy(api_params)
-        params['polygon'] = ",".join([str(each) for each in self.polygon_coords])
-
-        start_time = timeit.default_timer()
-        found_urls = [each['url'] for each in itslive_ui.get_granule_urls(params)]
-        total_num = len(found_urls)
-        time_delta = timeit.default_timer() - start_time
-        print(f"Number of found by API granules: {total_num} (took {time_delta} seconds)")
-
-        if len(found_urls) == 0:
-            print(f"No granules are found for the search API parameters: {params}")
-            return
-
-        # Keep track of skipped granules due to the other than target projection
-        skipped_proj_granules = {}
-        # Keep track of skipped granules due to the no data for the polygon of interest
-        skipped_empty_granules = []
-
+        found_urls = self.request_granules(api_params, num_granules)
+        
         # Parallelize layer collection
         s3 = s3fs.S3FileSystem(anon=True)
 
-        # Number of granules to examine is specified (it's very slow to examine all granules sequentially)
-        if num_granules:
-            found_urls = found_urls[:num_granules]
-            print(f"Examining only {len(found_urls)} first granules out of {total_num} found granules")
-
-        # # Create Dask client for processing: using "threads" scheduler
-        # client = Client(processes=False, n_workers=ITSCube.NUM_THREADS)
+        # In order to enable Dask profiling, need to create Dask client for
+        # processing: using "processes" or "threads" scheduler
+        # client = Client(processes=True, n_workers=ITSCube.NUM_THREADS)
         # # Use client to collection profile information
         # client.profile(filename=f"dask-profile-{num_granules}-parallel.html")
         tasks = [dask.delayed(self.read_s3_dataset)(each_file, s3) for each_file in found_urls]
 
         with ProgressBar():
-            # Display progress bar
+            # Display Dask's progress bar
 
             # If to collect performance report (need to define global Client - see above)
             # with performance_report(filename=f"dask-report-{num_granules}.html"):
             #     results = dask.compute(tasks)
-            results = dask.compute(tasks, scheduler='processes', num_workers=ITSCube.NUM_THREADS)
+            results = dask.compute(tasks, scheduler=ITSCube.DASK_SCHEDULER, num_workers=ITSCube.NUM_THREADS)
 
         for each_ds in results[0]:
             cube_v, is_empty, ds_projection, url = each_ds
@@ -209,34 +215,104 @@ class ITSCube:
 
             else:
                 if is_empty:
-                    skipped_empty_granules.append(url)
+                    self.skipped_empty_granules.append(url)
 
                 else:
-                    skipped_proj_granules.setdefault(ds_projection, []).append(url)
+                    self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
 
         self.combine_layers()
-        ITSCube.format_stats(skipped_proj_granules, skipped_empty_granules, len(found_urls))
+        self.format_stats(len(found_urls))
 
-        return found_urls, skipped_proj_granules
+        return found_urls
 
-    def create_from_local(self, dirpath='data'):
+    def create_from_local(self, api_params: dict, num_granules=None, local_path=''):
         """
-        Create velocity cube by accessing local data from dirpath.
+        Create velocity cube by quering its_live API, but using local copy of the
+        granules which are downloaded apriori.
 
         api_params: dict
             Search API required parameters.
-        num: int
+        num_granules: int
             Number of first granules to examine.
-            TODO: This is a temporary solution to a very long time to open remote granules. Should not be used
-                  when running the code at AWS.
+            TODO: This is a temporary solution to a very long time to open remote granules.
+                  Should not be used when running the code in production mode.
+        local_path: str
+            Directory where granules files are downloaded to.
         """
-        # Re-set filtered velocities
-        self.velocities = {}
+        self.clear()
 
-        # Keep track of skipped granules due to the other than target projection
-        skipped_proj_granules = {}
-        # Keep track of skipped granules due to the no data for the polygon of interest
-        skipped_empty_granules = []
+        found_urls = self.request_granules(api_params, num_granules)
+
+        for each_url in tqdm(found_urls, ascii=True, desc='Reading and processing S3 granules'):
+            s3_file = os.path.basename(each_url)
+            s3_path = os.path.join(local_path, s3_file)
+
+            with xr.open_dataset(s3_path) as ds:
+                cube_v, is_empty, ds_projection, _ = self.preprocess_dataset(ds, each_url)
+
+                if cube_v is not None:
+                    # There can be multiple layers for the mid_date, collect all
+                    self.velocities.setdefault(cube_v.coords['mid_date'].values, []).append(cube_v)
+
+                else:
+                    if is_empty:
+                        self.skipped_empty_granules.append(each_url)
+
+                    else:
+                        self.skipped_proj_granules.setdefault(ds_projection, []).append(each_url)
+
+        self.combine_layers()
+        self.format_stats(len(found_urls))
+
+        return found_urls
+
+    def create_from_local_parallel(self, api_params: dict, num_granules=None, dirpath='data'):
+        """
+        Create velocity cube from local data in parallel.
+
+        dirpath: str
+            Directory that stores granules files. Default is 'data' sub-directory
+            accessible from the directory the code is running from.
+        """
+        self.clear()
+
+        found_urls = self.request_granules(api_params, num_granules)
+
+        # local_paths = [os.path.join(dirpath, os.path.basename(each_file)) for each_file in found_urls]
+        tasks = [dask.delayed(self.read_dataset)(os.path.join(dirpath, os.path.basename(each_file))) for each_file in found_urls]
+
+        with ProgressBar():
+            # Display progress bar
+            results = dask.compute(tasks, scheduler=ITSCube.DASK_SCHEDULER, num_workers=ITSCube.NUM_THREADS)
+
+        for each_ds in results[0]:
+            cube_v, is_empty, ds_projection, url = each_ds
+
+            if cube_v is not None:
+                # There can be multiple layers for the mid_date, collect all
+                self.velocities.setdefault(cube_v.coords['mid_date'].values, []).append(cube_v)
+
+            else:
+                if is_empty:
+                    self.skipped_empty_granules.append(cube_v.attrs['url'])
+
+                else:
+                    self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
+
+        self.combine_layers()
+        self.format_stats(len(found_urls))
+
+        return found_urls
+
+    def create_from_local_no_api(self, dirpath='data'):
+        """
+        Create velocity cube by accessing local data from dirpath.
+
+        dirpath: str
+            Directory that stores granules files. Default is 'data' sub-directory
+            accessible from the directory the code is running from.
+        """
+        self.clear()
 
         found_urls = glob.glob(dirpath + os.sep + '*.nc')
 
@@ -251,41 +327,34 @@ class ITSCube:
 
                 else:
                     if is_empty:
-                        skipped_empty_granules.append(each_url)
+                        self.skipped_empty_granules.append(each_url)
 
                     else:
-                        skipped_proj_granules.setdefault(ds_projection, []).append(each_url)
+                        self.skipped_proj_granules.setdefault(ds_projection, []).append(each_url)
 
         self.combine_layers()
-        ITSCube.format_stats(skipped_proj_granules, skipped_empty_granules, len(found_urls))
+        self.format_stats(len(found_urls))
 
-        return found_urls, skipped_proj_granules
+        return found_urls
 
-    def create_from_local_parallel(self, dirpath='data'):
+    def create_from_local_parallel_no_api(self, dirpath='data'):
         """
-        Create velocity cube from local data in parallel.
+        Create velocity cube from local data from dirpath in parallel.
 
-        api_params: dict
-            Search API required parameters.
-        num: int
-            Number of first granules to examine.
-            TODO: This is a temporary solution to a very long time to open remote granules. Should not be used
-                  when running the code at AWS.
+        dirpath: str
+            Directory that stores granules files. Default is 'data' sub-directory
+            accessible from the directory the code is running from.
         """
-        # Re-set filtered velocities
-        self.velocities = {}
-
-        # Keep track of skipped granules due to the other than target projection
-        skipped_proj_granules = {}
-        # Keep track of skipped granules due to the no data for the polygon of interest
-        skipped_empty_granules = []
+        self.clear()
 
         found_urls = glob.glob(dirpath + os.sep + '*.nc')
 
         tasks = [dask.delayed(self.read_dataset)(each_file) for each_file in found_urls]
         with ProgressBar():
             # Display progress bar
-            results = dask.compute(tasks, scheduler='processes', num_workers=ITSCube.NUM_THREADS)
+            results = dask.compute(tasks, 
+                                   scheduler=ITSCube.DASK_SCHEDULER,
+                                   num_workers=ITSCube.NUM_THREADS)
 
         for each_ds in results[0]:
             cube_v, is_empty, ds_projection, url = each_ds
@@ -296,15 +365,15 @@ class ITSCube:
 
             else:
                 if is_empty:
-                    skipped_empty_granules.append(cube_v.attrs['url'])
+                    self.skipped_empty_granules.append(cube_v.attrs['url'])
 
                 else:
-                    skipped_proj_granules.setdefault(ds_projection, []).append(url)
+                    self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
 
         self.combine_layers()
-        ITSCube.format_stats(skipped_proj_granules, skipped_empty_granules, len(found_urls))
+        self.format_stats(len(found_urls))
 
-        return found_urls, skipped_proj_granules
+        return found_urls
 
     def preprocess_dataset(self, ds: xr.Dataset, ds_url: str):
         """
@@ -324,6 +393,10 @@ class ITSCube:
                     processing: no track of inputs for each task, but have output
                     available for each task).
         """
+        # Try to load the whole dataset into memory to avoid penalty for random read access
+        # when accessing S3 bucket (?)
+        # ds.load()
+        
         # Flag if layer data is empty.
         empty = False
 
@@ -350,6 +423,7 @@ class ITSCube:
 
             # If it's a valid velocity layer, add it to the cube.
             if np.any(cube_v.notnull()):
+                # Uncomment if to use random access read of filtered data only
                 cube_v.load()
 
                 # Add middle date as a new coordinate
@@ -396,19 +470,21 @@ class ITSCube:
 
         # No need for collected velocities pairs anymore (enable once don't need
         # to examine collected layers in Jupyter notebook)
-#         self.velocities = None
+        self.velocities = None
 
-    @staticmethod
-    def format_stats(skipped_proj_granules: dict, skipped_empty_granules: dict, num_urls: int):
-
+    def format_stats(self, num_urls: int):
+        """
+        Format statistics of the run.
+        """
         # Total number of skipped granules due to wrong projection
-        sum_projs = sum([len(each) for each in skipped_proj_granules.values()])
+        sum_projs = sum([len(each) for each in self.skipped_proj_granules.values()])
+        print("Total skipped projections: ", sum_projs, " vs. dictionary ", len(self.skipped_proj_granules))
 
         print( "Skipped granules:")
-        print(f"      empty data       : {len(skipped_empty_granules)} ({100.0 * len(skipped_empty_granules)/num_urls}%)")
+        print(f"      empty data       : {len(self.skipped_empty_granules)} ({100.0 * len(self.skipped_empty_granules)/num_urls}%)")
         print(f"      wrong projection : {sum_projs} ({100.0 * sum_projs/num_urls}%)")
-        if len(skipped_proj_granules):
-            print(f"      wrong projections: {sorted(skipped_proj_granules.keys())}")
+        if len(self.skipped_proj_granules):
+            print(f"      wrong projections: {sorted(self.skipped_proj_granules.keys())}")
 
     def read_dataset(self, url: str):
         """
@@ -503,13 +579,18 @@ if __name__ == '__main__':
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('-t', '--threads', type=int, default=4,
                         help='number of threads to use for parallel processing.')
+    parser.add_argument('-s', '--scheduler', type=str, default="processes",
+                        help="Dask scheduler to use. One of ['threads', 'processes'].")
     parser.add_argument('-p', '--parallel', action='store_true',
                         help='enable parallel processing')
     parser.add_argument('-n', '--numberGranules', type=int, required=False, default=100,
                         help='number of ITS_LIVE granules to consider for the cube (due to runtime limitations)')
+    parser.add_argument('-l', '--localPath', type=str, default=None,
+                        help='Local path that stores ITS_LIVE granules')
 
     args = parser.parse_args()
     ITSCube.NUM_THREADS = args.threads
+    ITSCube.DASK_SCHEDULER = args.scheduler
 
     # Test Case from itscube.ipynb:
     # =============================
@@ -544,9 +625,19 @@ if __name__ == '__main__':
     if not args.parallel:
         # Process ITS_LIVE granules sequentially, look at provided number of granules only
         print("Processing granules sequentially...")
-        cube.create(API_params, args.numberGranules)
+        if args.localPath:
+            # Granules are downloaded locally
+            cube.create_from_local(API_params, args.numberGranules, args.localPath)
+
+        else:
+            cube.create(API_params, args.numberGranules)
 
     else:
         # Process ITS_LIVE granules in parallel, look at 100 first granules only
         print("Processing granules in parallel...")
-        cube.create_parallel(API_params, args.numberGranules)
+        if args.localPath:
+            # Granules are downloaded locally
+            cube.create_from_local_parallel(API_params, args.numberGranules, args.localPath)
+
+        else:
+            cube.create_parallel(API_params, args.numberGranules)
