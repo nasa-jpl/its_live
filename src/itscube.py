@@ -74,14 +74,15 @@ class ITSCube:
         print(f"Longitude/latitude coords for polygon: {self.polygon_coords}")
 
         # Lists to store filtered by region/start_date/end_date velocity pairs
-        # and corresponding middle dates (+ date separation in days as milliseconds)
+        # and corresponding metadata (middle dates (+ date separation in days as milliseconds),
+        # original granules URLs)
         self.velocities = []
         self.velocities_dates = []
         self.velocities_urls = []
 
         # Keep track of skipped granules due to the other than target projection
         self.skipped_proj_granules = {}
-        # Keep track of skipped granules due to the no data for the polygon of interest
+        # Keep track of skipped granules due to no data for the polygon of interest
         self.skipped_empty_granules = []
 
         # Constructed cube
@@ -137,7 +138,7 @@ class ITSCube:
         Examine the layer if it qualifies to be added as a cube layer.
         """
         if layer is not None:
-            # TODO: If there's a layer for the middle date already, pick the one with newer processing date
+            # TODO: If there's a layer for the mid_date already, pick the one with newer processing date
             # if mid_date in self.dates:
             #    raise RuntimeError(f"{mid_date} layer already exists, tried to add {url}")
 
@@ -180,22 +181,6 @@ class ITSCube:
                     results = self.preprocess_dataset(ds, each_url)
                     self.add_layer(*results)
 
-#                     if cube_v is not None:
-#                         # TODO: If there's a layer for the middle date already, pick the one with newer processing date
-#                         # if mid_date in self.dates:
-#                         #    raise RuntimeError(f"{mid_date} layer already exists, tried to add {each_url}")
-
-#                         # print(f"Adding {cube_v.attrs['url']} for {cube_v.attrs['mid_date']}")
-#                         self.velocities_dates.append(mid_date)
-#                         self.velocities.append(cube_v)
-
-#                     else:
-#                         if is_empty:
-#                             self.skipped_empty_granules.append(each_url)
-
-#                         else:
-#                             self.skipped_proj_granules.setdefault(int(ds_projection), []).append(each_url)
-
         self.combine_layers()
 
         # Report statistics for skipped granules
@@ -209,7 +194,7 @@ class ITSCube:
 
         api_params: dict
             Search API required parameters.
-        num: int
+        num_granules: int
             Number of first granules to examine.
             TODO: This is a temporary solution to a very long time to open remote granules. Should not be used
                   when running the code at AWS.
@@ -238,24 +223,7 @@ class ITSCube:
             results = dask.compute(tasks, scheduler=ITSCube.DASK_SCHEDULER, num_workers=ITSCube.NUM_THREADS)
 
         for each_ds in results[0]:
-#             cube_v, mid_date, is_empty, url = each_ds
             self.add_layer(*each_ds)
-
-#             if cube_v is not None:
-#                 # TODO: If there's a layer for the middle date already, pick the one with newer processing date
-#                 # if mid_date in self.dates:
-#                 #    raise RuntimeError(f"{mid_date} layer already exists, tried to add {each_url}")
-                    
-#                 # print(f"Adding {each_url} for {mid_date}")
-#                 self.velocities_dates.append(mid_date)
-#                 self.velocities.append(cube_v)
-
-#             else:
-#                 if is_empty:
-#                     self.skipped_empty_granules.append(url)
-
-#                 else:
-#                     self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
 
         self.combine_layers()
         self.format_stats(len(found_urls))
@@ -288,22 +256,6 @@ class ITSCube:
                 results = self.preprocess_dataset(ds, each_url)
                 self.add_layer(*results)
 
-#                 if cube_v is not None:
-#                     # TODO: If there's a layer for the middle date already, pick the one with newer processing date
-#                     # if mid_date in self.dates:
-#                     #    raise RuntimeError(f"{mid_date} layer already exists, tried to add {each_url}")
-
-#                     # print(f"Adding {each_url} for {mid_date}")
-#                     self.velocities_dates.append(mid_date)
-#                     self.velocities.append(cube_v)
-
-#                 else:
-#                     if is_empty:
-#                         self.skipped_empty_granules.append(each_url)
-
-#                     else:
-#                         self.skipped_proj_granules.setdefault(ds_projection, []).append(each_url)
-
         self.combine_layers()
         self.format_stats(len(found_urls))
 
@@ -313,6 +265,12 @@ class ITSCube:
         """
         Create velocity cube from local data in parallel.
 
+        api_params: dict
+            Search API required parameters.
+        num_granules: int
+            Number of first granules to examine.
+            TODO: This is a temporary solution to a very long time to open remote granules.
+                  Should not be used when running the code in production mode.
         dirpath: str
             Directory that stores granules files. Default is 'data' sub-directory
             accessible from the directory the code is running from.
@@ -330,23 +288,6 @@ class ITSCube:
 
         for each_ds in results[0]:
             self.add_layer(*each_ds)
-
-#             if cube_v is not None:
-#                 # TODO: If there's a layer for the middle date already, pick the one with newer processing date
-#                 # if cube_v.attrs['mid_date'] in self.dates:
-#                 #    print("URLS: ", '\n'.join([each_layer.attrs['url'] for each_layer in self.velocities]))
-#                 #    raise RuntimeError(f"{cube_v.attrs['mid_date']} layer already exists, tried to add {cube_v.attrs['url']}")
-
-#                 # print(f"Adding {cube_v.attrs['url']} for {cube_v.attrs['mid_date']}")
-#                 self.velocities_dates.append(cube_v.attrs['mid_date'])
-#                 self.velocities.append(cube_v)
-
-#             else:
-#                 if is_empty:
-#                     self.skipped_empty_granules.append(cube_v.attrs['url'])
-
-#                 else:
-#                     self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
 
         self.combine_layers()
         self.format_stats(len(found_urls))
@@ -370,23 +311,6 @@ class ITSCube:
             with xr.open_dataset(each_url) as ds:
                 results = self.preprocess_dataset(ds, each_url)
                 self.add_layer(*results)
-
-#                 if cube_v is not None:
-#                     # TODO: If there's a layer for the middle date already, pick the one with newer processing date
-#                     # if cube_v.attrs['mid_date'] in self.dates:
-#                     #    print("URLS: ", '\n'.join([each_layer.attrs['url'] for each_layer in self.velocities]))
-#                     #    raise RuntimeError(f"{cube_v.attrs['mid_date']} layer already exists, tried to add {cube_v.attrs['url']}")
-
-#                     # print(f"Adding {cube_v.attrs['url']} for {cube_v.attrs['mid_date']}")
-#                     self.velocities_dates.append(cube_v.attrs['mid_date'])
-#                     self.velocities.append(cube_v)
-
-#                 else:
-#                     if is_empty:
-#                         self.skipped_empty_granules.append(each_url)
-
-#                     else:
-#                         self.skipped_proj_granules.setdefault(ds_projection, []).append(each_url)
 
         self.combine_layers()
         self.format_stats(len(found_urls))
@@ -414,23 +338,6 @@ class ITSCube:
 
         for each_ds in results[0]:
             self.add_layer(*each_ds)
-
-#             if cube_v is not None:
-#                 # TODO: If there's a layer for the middle date already, pick the one with newer processing date
-#                 # if cube_v.attrs['mid_date'] in self.dates:
-#                 #    print("URLS: ", '\n'.join([each_layer.attrs['url'] for each_layer in self.velocities]))
-#                 #    raise RuntimeError(f"{cube_v.attrs['mid_date']} layer already exists, tried to add {cube_v.attrs['url']}")
-
-#                 # print(f"Adding {cube_v.attrs['url']} for {cube_v.attrs['mid_date']}")
-#                 self.velocities_dates.append(cube_v.attrs['mid_date'])
-#                 self.velocities.append(cube_v)
-
-#             else:
-#                 if is_empty:
-#                     self.skipped_empty_granules.append(cube_v.attrs['url'])
-
-#                 else:
-#                     self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
 
         self.combine_layers()
         self.format_stats(len(found_urls))
@@ -505,40 +412,31 @@ class ITSCube:
                 mid_date = None
                 empty = True
 
-        # Have to return URL for the dataset to track it in parallel processing
+        # Have to return URL for the dataset, which is provided as an input to the method,
+        # to track URL per granule in parallel processing
         return cube_v, mid_date, empty, ds_url
 
     def combine_layers(self):
         """
-        Combine selected layers into one xr.DataArray (TODO: store layers in xr.Dataset)
+        Combine selected layers into one xr.Dataset object.
         """
         self.layers = {}
 
         # Construct xarray to hold layers by concatenating layer objects along 'mid_date' dimension
-        layers_urls = []
-        each_index = 0
         print('Combining layers by date...')
         start_time = timeit.default_timer()
-        v_layers = xr.concat(self.velocities, pd.Index(self.velocities_dates, name='mid_date'))
-#         url_layers = xr.concat(self.velocities_urls, pd.Index(self.velocities_dates, name='mid_date'))
+        v_layers = xr.concat(self.velocities, 
+                             pd.Index(self.velocities_dates, name='mid_date'))
         time_delta = timeit.default_timer() - start_time
         print(f"Combined {len(self.velocities_dates)} layers by date (took {time_delta} seconds)")
-
-        arr = xr.DataArray([[1, 2, 3]], dims=['time', 'x'])
-        arr['time'] = np.array([1])
-        time_bnds = xr.DataArray([[0, 1]], dims=('time', 'nv'))
-        arr['time'].attrs['bounds'] = 'time_bnds'
 
         # TODO: Create xr.Dataset to represent the cube
         self.layers = xr.Dataset({'v': v_layers,
                                   'url': self.velocities_urls})
+        
         self.layers.attrs['projection'] = str(self.projection)
 
-
-#         self.layers.attrs['url'] = self.velocities_urls
-#         self.layers.attrs['projection'] = str(self.projection)
-
-        # No need for collected velocities pairs anymore (enable once don't need
+        # No need for collected velocities pairs anymore (disable if need
         # to examine collected layers in Jupyter notebook)
         self.velocities = None
 
@@ -573,58 +471,58 @@ class ITSCube:
             with xr.open_dataset(fhandle, engine=ITSCube.NC_ENGINE) as ds:
                 return self.preprocess_dataset(ds, each_url)
 
-    def plot_layers(self):
-        """
-        Plot cube's velocities in date order. Each layer has its own x/y coordinate labels based on data values
-        present in the layer. This method provides a better insight into data variation within each layer.
-        """
-        num_granules = sum([len(each) for each in self.velocities.values()])
+#     def plot_layers(self):
+#         """
+#         Plot cube's velocities in date order. Each layer has its own x/y coordinate labels based on data values
+#         present in the layer. This method provides a better insight into data variation within each layer.
+#         """
+#         num_granules = len(self.velocities)
 
-        num_cols = 5
-        num_rows = int(num_granules / num_cols)
-        print(f"rows={num_rows} cols={num_cols}")
+#         num_cols = 5
+#         num_rows = int(num_granules / num_cols)
+#         print(f"rows={num_rows} cols={num_cols}")
 
-        if (num_granules % num_cols) != 0:
-            num_rows += 1
+#         if (num_granules % num_cols) != 0:
+#             num_rows += 1
 
-        _, axes = plt.subplots(ncols=num_cols, nrows=num_rows, figsize=(num_cols*4, num_rows*4))
-        col_index = 0
-        row_index = 0
-        for each_date in sorted(self.velocities.keys()):
-            if col_index == num_cols:
-                col_index = 0
-                row_index += 1
+#         _, axes = plt.subplots(ncols=num_cols, nrows=num_rows, figsize=(num_cols*4, num_rows*4))
+#         col_index = 0
+#         row_index = 0
+#         for each_date in sorted(self.velocities.keys()):
+#             if col_index == num_cols:
+#                 col_index = 0
+#                 row_index += 1
 
-            for each_layer in self.velocities[each_date]:
-                each_layer.plot(ax=axes[row_index, col_index])
-                axes[row_index, col_index].title.set_text(str(each_date))
+#             for each_layer in self.velocities[each_date]:
+#                 each_layer.plot(ax=axes[row_index, col_index])
+#                 axes[row_index, col_index].title.set_text(str(each_date))
 
-                col_index += 1
-                if col_index == num_cols:
-                    col_index = 0
-                    row_index += 1
+#                 col_index += 1
+#                 if col_index == num_cols:
+#                     col_index = 0
+#                     row_index += 1
 
-        plt.tight_layout()
-        plt.draw()
+#         plt.tight_layout()
+#         plt.draw()
 
-    def plot_num_layers(self, num: int):
-        """
-        Plot specified number of first cube's velocities in date order. Each layer has its own x/y coordinate labels based on data values
-        present in the layer. This method provides a better insight into data variation within each layer.
-        """
-        _, axes = plt.subplots(ncols=num, figsize=(num*4, 4))
-        num_index = 0
-        for each_date in sorted(self.velocities.keys()):
-            if num_index == num:
-                break
+#     def plot_num_layers(self, num: int):
+#         """
+#         Plot specified number of first cube's velocities in date order. Each layer has its own x/y coordinate labels based on data values
+#         present in the layer. This method provides a better insight into data variation within each layer.
+#         """
+#         _, axes = plt.subplots(ncols=num, figsize=(num*4, 4))
+#         num_index = 0
+#         for each_date in sorted(self.velocities.keys()):
+#             if num_index == num:
+#                 break
 
-            for each_v in self.velocities[each_date]:
-                each_v.plot(ax=axes[num_index])
-                axes[num_index].title.set_text(str(each_date))
-                num_index += 1
+#             for each_v in self.velocities[each_date]:
+#                 each_v.plot(ax=axes[num_index])
+#                 axes[num_index].title.set_text(str(each_date))
+#                 num_index += 1
 
-        plt.tight_layout()
-        plt.draw()
+#         plt.tight_layout()
+#         plt.draw()
 
     def plot(self):
         """
