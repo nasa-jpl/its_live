@@ -1,4 +1,5 @@
 import copy
+import datetime
 import dask
 from dask.distributed import Client, performance_report
 from dask.diagnostics import ProgressBar
@@ -7,6 +8,7 @@ import glob
 import os
 import numpy  as np
 import matplotlib.pyplot as plt
+import pandas as pd
 import s3fs
 import timeit
 from tqdm import tqdm
@@ -71,10 +73,11 @@ class ITSCube:
 
         print(f"Longitude/latitude coords for polygon: {self.polygon_coords}")
 
-        # Dictionary to store filtered by region/start_date/end_date velocity pairs
-        # in the following format:
-        #    mid_date: velocity values
-        self.velocities = {}
+        # Lists to store filtered by region/start_date/end_date velocity pairs
+        # and corresponding middle dates (+ date separation in days as milliseconds)
+        self.velocities = []
+        self.velocities_dates = []
+        self.velocities_urls = []
 
         # Keep track of skipped granules due to the other than target projection
         self.skipped_proj_granules = {}
@@ -88,11 +91,12 @@ class ITSCube:
         """
         Reset all internal data structures.
         """
-        self.velocities = {}
+        self.velocities = []
+        self.velocities_dates = []
+        self.velocities_urls = []
         self.skipped_proj_granules = {}
         self.skipped_empty_granules = []
         self.layers = None
-
         
     def request_granules(self, api_params: dict, num_granules: int):
         """
@@ -128,6 +132,27 @@ class ITSCube:
 
         return found_urls
 
+    def add_layer(self, layer, mid_date, is_empty, url):
+        """
+        Examine the layer if it qualifies to be added as a cube layer.
+        """
+        if layer is not None:
+            # TODO: If there's a layer for the middle date already, pick the one with newer processing date
+            # if mid_date in self.dates:
+            #    raise RuntimeError(f"{mid_date} layer already exists, tried to add {url}")
+
+            # print(f"Adding {url} for {mid_date}")
+            self.velocities_dates.append(mid_date)
+            self.velocities.append(layer)
+            self.velocities_urls.append(url)
+
+        else:
+            if is_empty:
+                self.skipped_empty_granules.append(url)
+
+            else:
+                self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
+
     def create(self, api_params: dict, num_granules=None):
         """
         Create velocity cube.
@@ -152,19 +177,24 @@ class ITSCube:
 
             with s3.open(s3_path, mode='rb') as fhandle:
                 with xr.open_dataset(fhandle, engine=ITSCube.NC_ENGINE) as ds:
-                    cube_v, is_empty, ds_projection, _ = self.preprocess_dataset(ds, each_url)
+                    results = self.preprocess_dataset(ds, each_url)
+                    self.add_layer(*results)
 
-                    if cube_v is not None:
-                        # There can be multiple layers for the mid_date, collect all
-                        self.velocities.setdefault(
-                            cube_v.coords['mid_date'].values, []).append(cube_v)
+#                     if cube_v is not None:
+#                         # TODO: If there's a layer for the middle date already, pick the one with newer processing date
+#                         # if mid_date in self.dates:
+#                         #    raise RuntimeError(f"{mid_date} layer already exists, tried to add {each_url}")
 
-                    else:
-                        if is_empty:
-                            self.skipped_empty_granules.append(each_url)
+#                         # print(f"Adding {cube_v.attrs['url']} for {cube_v.attrs['mid_date']}")
+#                         self.velocities_dates.append(mid_date)
+#                         self.velocities.append(cube_v)
 
-                        else:
-                            self.skipped_proj_granules.setdefault(int(ds_projection), []).append(each_url)
+#                     else:
+#                         if is_empty:
+#                             self.skipped_empty_granules.append(each_url)
+
+#                         else:
+#                             self.skipped_proj_granules.setdefault(int(ds_projection), []).append(each_url)
 
         self.combine_layers()
 
@@ -193,8 +223,9 @@ class ITSCube:
 
         # In order to enable Dask profiling, need to create Dask client for
         # processing: using "processes" or "threads" scheduler
-        # client = Client(processes=True, n_workers=ITSCube.NUM_THREADS)
-        # # Use client to collection profile information
+        # processes_scheduler = True if ITSCube.DASK_SCHEDULER == 'processes' else False
+        # client = Client(processes=processes_scheduler, n_workers=ITSCube.NUM_THREADS)
+        # # Use client to collect profile information
         # client.profile(filename=f"dask-profile-{num_granules}-parallel.html")
         tasks = [dask.delayed(self.read_s3_dataset)(each_file, s3) for each_file in found_urls]
 
@@ -207,18 +238,24 @@ class ITSCube:
             results = dask.compute(tasks, scheduler=ITSCube.DASK_SCHEDULER, num_workers=ITSCube.NUM_THREADS)
 
         for each_ds in results[0]:
-            cube_v, is_empty, ds_projection, url = each_ds
+#             cube_v, mid_date, is_empty, url = each_ds
+            self.add_layer(*each_ds)
 
-            if cube_v is not None:
-                # There can be multiple layers for the mid_date, collect all
-                self.velocities.setdefault(cube_v.coords['mid_date'].values, []).append(cube_v)
+#             if cube_v is not None:
+#                 # TODO: If there's a layer for the middle date already, pick the one with newer processing date
+#                 # if mid_date in self.dates:
+#                 #    raise RuntimeError(f"{mid_date} layer already exists, tried to add {each_url}")
+                    
+#                 # print(f"Adding {each_url} for {mid_date}")
+#                 self.velocities_dates.append(mid_date)
+#                 self.velocities.append(cube_v)
 
-            else:
-                if is_empty:
-                    self.skipped_empty_granules.append(url)
+#             else:
+#                 if is_empty:
+#                     self.skipped_empty_granules.append(url)
 
-                else:
-                    self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
+#                 else:
+#                     self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
 
         self.combine_layers()
         self.format_stats(len(found_urls))
@@ -248,18 +285,24 @@ class ITSCube:
             s3_path = os.path.join(local_path, s3_file)
 
             with xr.open_dataset(s3_path) as ds:
-                cube_v, is_empty, ds_projection, _ = self.preprocess_dataset(ds, each_url)
+                results = self.preprocess_dataset(ds, each_url)
+                self.add_layer(*results)
 
-                if cube_v is not None:
-                    # There can be multiple layers for the mid_date, collect all
-                    self.velocities.setdefault(cube_v.coords['mid_date'].values, []).append(cube_v)
+#                 if cube_v is not None:
+#                     # TODO: If there's a layer for the middle date already, pick the one with newer processing date
+#                     # if mid_date in self.dates:
+#                     #    raise RuntimeError(f"{mid_date} layer already exists, tried to add {each_url}")
 
-                else:
-                    if is_empty:
-                        self.skipped_empty_granules.append(each_url)
+#                     # print(f"Adding {each_url} for {mid_date}")
+#                     self.velocities_dates.append(mid_date)
+#                     self.velocities.append(cube_v)
 
-                    else:
-                        self.skipped_proj_granules.setdefault(ds_projection, []).append(each_url)
+#                 else:
+#                     if is_empty:
+#                         self.skipped_empty_granules.append(each_url)
+
+#                     else:
+#                         self.skipped_proj_granules.setdefault(ds_projection, []).append(each_url)
 
         self.combine_layers()
         self.format_stats(len(found_urls))
@@ -286,18 +329,24 @@ class ITSCube:
             results = dask.compute(tasks, scheduler=ITSCube.DASK_SCHEDULER, num_workers=ITSCube.NUM_THREADS)
 
         for each_ds in results[0]:
-            cube_v, is_empty, ds_projection, url = each_ds
+            self.add_layer(*each_ds)
 
-            if cube_v is not None:
-                # There can be multiple layers for the mid_date, collect all
-                self.velocities.setdefault(cube_v.coords['mid_date'].values, []).append(cube_v)
+#             if cube_v is not None:
+#                 # TODO: If there's a layer for the middle date already, pick the one with newer processing date
+#                 # if cube_v.attrs['mid_date'] in self.dates:
+#                 #    print("URLS: ", '\n'.join([each_layer.attrs['url'] for each_layer in self.velocities]))
+#                 #    raise RuntimeError(f"{cube_v.attrs['mid_date']} layer already exists, tried to add {cube_v.attrs['url']}")
 
-            else:
-                if is_empty:
-                    self.skipped_empty_granules.append(cube_v.attrs['url'])
+#                 # print(f"Adding {cube_v.attrs['url']} for {cube_v.attrs['mid_date']}")
+#                 self.velocities_dates.append(cube_v.attrs['mid_date'])
+#                 self.velocities.append(cube_v)
 
-                else:
-                    self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
+#             else:
+#                 if is_empty:
+#                     self.skipped_empty_granules.append(cube_v.attrs['url'])
+
+#                 else:
+#                     self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
 
         self.combine_layers()
         self.format_stats(len(found_urls))
@@ -319,18 +368,25 @@ class ITSCube:
         # Number of granules to examine is specified (it's very slow to examine all granules sequentially)
         for each_url in tqdm(found_urls, ascii=True, desc='Processing local granules'):
             with xr.open_dataset(each_url) as ds:
-                cube_v, is_empty, ds_projection, _ = self.preprocess_dataset(ds, each_url)
+                results = self.preprocess_dataset(ds, each_url)
+                self.add_layer(*results)
 
-                if cube_v is not None:
-                    # There can be multiple layers for the mid_date, collect all
-                    self.velocities.setdefault(cube_v.coords['mid_date'].values, []).append(cube_v)
+#                 if cube_v is not None:
+#                     # TODO: If there's a layer for the middle date already, pick the one with newer processing date
+#                     # if cube_v.attrs['mid_date'] in self.dates:
+#                     #    print("URLS: ", '\n'.join([each_layer.attrs['url'] for each_layer in self.velocities]))
+#                     #    raise RuntimeError(f"{cube_v.attrs['mid_date']} layer already exists, tried to add {cube_v.attrs['url']}")
 
-                else:
-                    if is_empty:
-                        self.skipped_empty_granules.append(each_url)
+#                     # print(f"Adding {cube_v.attrs['url']} for {cube_v.attrs['mid_date']}")
+#                     self.velocities_dates.append(cube_v.attrs['mid_date'])
+#                     self.velocities.append(cube_v)
 
-                    else:
-                        self.skipped_proj_granules.setdefault(ds_projection, []).append(each_url)
+#                 else:
+#                     if is_empty:
+#                         self.skipped_empty_granules.append(each_url)
+
+#                     else:
+#                         self.skipped_proj_granules.setdefault(ds_projection, []).append(each_url)
 
         self.combine_layers()
         self.format_stats(len(found_urls))
@@ -357,18 +413,24 @@ class ITSCube:
                                    num_workers=ITSCube.NUM_THREADS)
 
         for each_ds in results[0]:
-            cube_v, is_empty, ds_projection, url = each_ds
+            self.add_layer(*each_ds)
 
-            if cube_v is not None:
-                # There can be multiple layers for the mid_date, collect all
-                self.velocities.setdefault(cube_v.coords['mid_date'].values, []).append(cube_v)
+#             if cube_v is not None:
+#                 # TODO: If there's a layer for the middle date already, pick the one with newer processing date
+#                 # if cube_v.attrs['mid_date'] in self.dates:
+#                 #    print("URLS: ", '\n'.join([each_layer.attrs['url'] for each_layer in self.velocities]))
+#                 #    raise RuntimeError(f"{cube_v.attrs['mid_date']} layer already exists, tried to add {cube_v.attrs['url']}")
 
-            else:
-                if is_empty:
-                    self.skipped_empty_granules.append(cube_v.attrs['url'])
+#                 # print(f"Adding {cube_v.attrs['url']} for {cube_v.attrs['mid_date']}")
+#                 self.velocities_dates.append(cube_v.attrs['mid_date'])
+#                 self.velocities.append(cube_v)
 
-                else:
-                    self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
+#             else:
+#                 if is_empty:
+#                     self.skipped_empty_granules.append(cube_v.attrs['url'])
+
+#                 else:
+#                     self.skipped_proj_granules.setdefault(ds_projection, []).append(url)
 
         self.combine_layers()
         self.format_stats(len(found_urls))
@@ -386,6 +448,8 @@ class ITSCube:
 
         Returns:
         cube_v:     Filtered data array for the layer.
+        mid_date:   Middle date that corresponds to the velicity pair (uses date
+                    separation as milliseconds)
         empty:      Flag to indicate if dataset does not contain any data for
                     the cube region.
         projection: Source projection for the dataset.
@@ -405,6 +469,8 @@ class ITSCube:
 
         # Layer velocity data
         cube_v = None
+        # Layer middle date
+        mid_date = None
 
         # Consider granules with data only within target projection
         if str(int(ds.UTM_Projection.spatial_epsg)) == self.projection:
@@ -427,18 +493,20 @@ class ITSCube:
                 cube_v.load()
 
                 # Add middle date as a new coordinate
-                cube_v = cube_v.assign_coords({'mid_date': mid_date})
+                # cube_v = cube_v.assign_coords({'mid_date': mid_date})
+#                 cube_v.attrs['mid_date'] = mid_date
 
                 # Add file URL as its source for traceability
-                cube_v.attrs['url'] = ds_url
-                cube_v.attrs['epsg'] = ds_projection
+#                 cube_v.attrs['url'] = ds_url
 
             else:
                 # Reset cube back to None as it does not contain any valid data
                 cube_v = None
+                mid_date = None
                 empty = True
 
-        return cube_v, empty, int(ds_projection), ds_url
+        # Have to return URL for the dataset to track it in parallel processing
+        return cube_v, mid_date, empty, ds_url
 
     def combine_layers(self):
         """
@@ -449,24 +517,26 @@ class ITSCube:
         # Construct xarray to hold layers by concatenating layer objects along 'mid_date' dimension
         layers_urls = []
         each_index = 0
-        for each_date in tqdm(sorted(self.velocities.keys()), desc='Combining layers by date'):
-            start_index = 0
-            if each_index == 0:
-                # This is very first layer
-                self.layers = self.velocities[each_date][0]
-                layers_urls.append(self.velocities[each_date][0].attrs['url'])
-                start_index = 1
+        print('Combining layers by date...')
+        start_time = timeit.default_timer()
+        v_layers = xr.concat(self.velocities, pd.Index(self.velocities_dates, name='mid_date'))
+#         url_layers = xr.concat(self.velocities_urls, pd.Index(self.velocities_dates, name='mid_date'))
+        time_delta = timeit.default_timer() - start_time
+        print(f"Combined {len(self.velocities_dates)} layers by date (took {time_delta} seconds)")
 
-            if len(self.velocities[each_date]) > start_index:
-                for each_layer in self.velocities[each_date][start_index:]:
-                    # Concatenate along "mid_date" coordinate
-                    self.layers = xr.concat([self.layers, each_layer], 'mid_date')
-                    layers_urls.append(each_layer.attrs['url'])
+        arr = xr.DataArray([[1, 2, 3]], dims=['time', 'x'])
+        arr['time'] = np.array([1])
+        time_bnds = xr.DataArray([[0, 1]], dims=('time', 'nv'))
+        arr['time'].attrs['bounds'] = 'time_bnds'
 
-            each_index += 1
-
-        self.layers.attrs['url'] = layers_urls
+        # TODO: Create xr.Dataset to represent the cube
+        self.layers = xr.Dataset({'v': v_layers,
+                                  'url': self.velocities_urls})
         self.layers.attrs['projection'] = str(self.projection)
+
+
+#         self.layers.attrs['url'] = self.velocities_urls
+#         self.layers.attrs['projection'] = str(self.projection)
 
         # No need for collected velocities pairs anymore (enable once don't need
         # to examine collected layers in Jupyter notebook)
@@ -478,7 +548,6 @@ class ITSCube:
         """
         # Total number of skipped granules due to wrong projection
         sum_projs = sum([len(each) for each in self.skipped_proj_granules.values()])
-        print("Total skipped projections: ", sum_projs, " vs. dictionary ", len(self.skipped_proj_granules))
 
         print( "Skipped granules:")
         print(f"      empty data       : {len(self.skipped_empty_granules)} ({100.0 * len(self.skipped_empty_granules)/num_urls}%)")
@@ -641,3 +710,7 @@ if __name__ == '__main__':
 
         else:
             cube.create_parallel(API_params, args.numberGranules)
+
+    # Write cube data to the NetCDF file
+    cube.layers.to_netcdf('test_v_cube.nc')
+    
