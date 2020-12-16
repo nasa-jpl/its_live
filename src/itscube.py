@@ -14,7 +14,7 @@ from tqdm import tqdm
 import xarray as xr
 
 from itslive import itslive_ui
-from grid import Bounds
+from grid import Bounds, Grid
 
 
 class Coords:
@@ -30,9 +30,16 @@ class DataVars:
     """
     Data variables for the data cube.
     """
-    V = 'v'
-    VX = 'vx'
-    VY = 'vy'
+    # Original data variables per ITS_LIVE granules.
+    V               = 'v'
+    VX              = 'vx'
+    VY              = 'vy'
+    CHIP_SIZE_HIGHT = 'chip_size_height'
+    CHIP_SIZE_WIDTH = 'chip_size_width'
+    INTERP_MASK     = 'interp_mask'
+    V_ERROR         = 'v_error'
+
+    # Added for the datacube
     URL = 'url'
 
 
@@ -100,6 +107,11 @@ class ITSCube:
         self.v = []
         self.vx = []
         self.vy = []
+        self.chip_size_hight = []
+        self.chip_size_width = []
+        self.interp_mask = []
+        self.v_error = []
+
         self.dates = []
         self.urls = []
 
@@ -111,13 +123,24 @@ class ITSCube:
         # Constructed cube
         self.layers = None
 
-    def clear(self):
+    def clear_data_variables(self):
         """
-        Reset all internal data structures.
+        Reset all internal data variables (the same as original data variables in granules).
         """
         self.v = []
         self.vx = []
         self.vy = []
+        self.chip_size_hight = []
+        self.chip_size_width = []
+        self.interp_mask = []
+        self.v_error = []
+
+    def clear(self):
+        """
+        Reset all internal data structures.
+        """
+        self.clear_data_variables()
+
         self.dates = []
         self.urls = []
         self.skipped_proj_granules = {}
@@ -158,11 +181,12 @@ class ITSCube:
 
         return found_urls
 
-    def add_layer(self, is_empty, layer_projection, v_layer, vx_layer, vy_layer, mid_date, url):
+    def add_layer(self, is_empty, layer_projection, mid_date, url, data):
         """
         Examine the layer if it qualifies to be added as a cube layer.
         """
-        if v_layer is not None:
+        v, vx, vy, chip_size_hight, chip_size_width, interp_mask, v_error = data
+        if v is not None:
             # If there's a layer for the mid_date already, pick the one
             # with newer processing date
             if mid_date in self.dates:
@@ -196,9 +220,14 @@ class ITSCube:
                    url_proc_date_2 >= found_url_proc_date_2:
                     # Replace the granule with newer processed one
                     print(f"Replacing data for {mid_date} layer: {found_url} by {url}")
-                    self.v[index] = v_layer
-                    self.vx[index] = vx_layer
-                    self.vy[index] = vy_layer
+                    self.v[index] = v
+                    self.vx[index] = vx
+                    self.vy[index] = vy
+                    self.chip_size_hight[index] = chip_size_hight
+                    self.chip_size_width[index] = chip_size_width
+                    self.interp_mask[index] = interp_mask
+                    self.v_error[index] = v_error
+
                     self.urls[index] = url
                 else:
                     print(f"Keeping data for {mid_date} layer: {found_url} instead of new granule {url}")
@@ -206,9 +235,14 @@ class ITSCube:
             else:
                 # print(f"Adding {url} for {mid_date}")
                 self.dates.append(mid_date)
-                self.v.append(v_layer)
-                self.vx.append(vx_layer)
-                self.vy.append(vy_layer)
+                self.v.append(v)
+                self.vx.append(vx)
+                self.vy.append(vy)
+                self.chip_size_hight.append(chip_size_hight)
+                self.chip_size_width.append(chip_size_width)
+                self.interp_mask.append(interp_mask)
+                self.v_error.append(v_error)
+
                 self.urls.append(url)
 
         else:
@@ -308,7 +342,7 @@ class ITSCube:
             self.layers.to_netcdf(filename, engine=ITSCube.NC_ENGINE, unlimited_dims=(Coords.MID_DATE))
 
         else:
-            raise RuntimeError(f"No datacube data available to write to {filename} file.")
+            raise RuntimeError(f"Datacube data does not exist.")
 
     def create_from_local(self, api_params: dict, num_granules=None, local_path=''):
         """
@@ -454,6 +488,10 @@ class ITSCube:
         cube_v = None
         cube_vx = None
         cube_vy = None
+        cube_chip_size_height = None
+        cube_chip_size_width = None
+        cube_interp_mask = None
+        cube_v_error = None
 
         # Layer middle date
         mid_date = None
@@ -470,9 +508,18 @@ class ITSCube:
             mask_lon = (ds.x >= self.x.min) & (ds.x <= self.x.max)
             mask_lat = (ds.y >= self.y.min) & (ds.y <= self.y.max)
             mask_data = ds.where(mask_lon & mask_lat, drop=True)
+
+            # Get data variables for the polygon
             cube_v = mask_data.v
             cube_vx = mask_data.vx
             cube_vy = mask_data.vy
+            cube_chip_size_height = mask_data.chip_size_height
+            cube_chip_size_width = mask_data.chip_size_width
+            cube_interp_mask = mask_data.interp_mask
+            if DataVars.V_ERROR in mask_data:
+                cube_v_error = mask_data.v_error
+
+
             # Another way to filter:
             # cube_v = ds.v.sel(x=slice(self.x.min, self.x.max),y=slice(self.y.max, self.y.min)).copy()
 
@@ -482,18 +529,38 @@ class ITSCube:
                 cube_v.load()
                 cube_vx.load()
                 cube_vy.load()
+                cube_chip_size_height.load()
+                cube_chip_size_width.load()
+                cube_interp_mask.load()
+                if cube_v_error is not None:
+                    cube_v_error.load()
+
+                else:
+                    # Create empty array as it is not provided in the granule,
+                    # use the same coordinates as for any cube's data variables.
+                    cube_v_error = xr.DataArray(
+                        data=None,
+                        coords=[cube_v.coords[Coords.Y], cube_v.coords[Coords.X]],
+                        dims=[Coords.Y, Coords.X])
 
             else:
                 # Reset cube back to None as it does not contain any valid data
                 cube_v = None
                 cube_vx = None
                 cube_vy = None
+                cube_chip_size_height = None
+                cube_chip_size_width = None
+                cube_interp_mask = None
+                cube_v_error = None
+
                 mid_date = None
                 empty = True
 
         # Have to return URL for the dataset, which is provided as an input to the method,
         # to track URL per granule in parallel processing
-        return empty, int(ds.UTM_Projection.spatial_epsg), cube_v, cube_vx, cube_vy, mid_date, ds_url
+        return empty, int(ds.UTM_Projection.spatial_epsg), mid_date, ds_url, \
+            (cube_v, cube_vx, cube_vy, cube_chip_size_height, cube_chip_size_width, \
+             cube_interp_mask, cube_v_error)
 
     def combine_layers(self):
         """
@@ -504,9 +571,15 @@ class ITSCube:
         # Construct xarray to hold layers by concatenating layer objects along 'mid_date' dimension
         print('Combining layers by date...')
         start_time = timeit.default_timer()
-        v_layers = xr.concat(self.v, pd.Index(self.dates, name=Coords.MID_DATE))
-        vx_layers = xr.concat(self.vx, pd.Index(self.dates, name=Coords.MID_DATE))
-        vy_layers = xr.concat(self.vy, pd.Index(self.dates, name=Coords.MID_DATE))
+        mid_date_coord = pd.Index(self.dates, name=Coords.MID_DATE)
+
+        v_layers = xr.concat(self.v, mid_date_coord)
+        vx_layers = xr.concat(self.vx, mid_date_coord)
+        vy_layers = xr.concat(self.vy, mid_date_coord)
+        chip_size_hight_layers = xr.concat(self.chip_size_hight, mid_date_coord)
+        chip_size_width_layers = xr.concat(self.chip_size_width, mid_date_coord)
+        interp_mask_layers = xr.concat(self.interp_mask, mid_date_coord)
+        v_error_layers = xr.concat(self.v_error, mid_date_coord)
 
         time_delta = timeit.default_timer() - start_time
         print(f"Combined {len(self.dates)} layers by date (took {time_delta} seconds)")
@@ -520,6 +593,10 @@ class ITSCube:
                 DataVars.V: ([Coords.MID_DATE, Coords.Y, Coords.X], v_layers.data),
                 DataVars.VX: ([Coords.MID_DATE, Coords.Y, Coords.X], vx_layers.data),
                 DataVars.VY: ([Coords.MID_DATE, Coords.Y, Coords.X], vy_layers.data),
+                DataVars.CHIP_SIZE_HIGHT: ([Coords.MID_DATE, Coords.Y, Coords.X], chip_size_hight_layers.data),
+                DataVars.CHIP_SIZE_WIDTH: ([Coords.MID_DATE, Coords.Y, Coords.X], chip_size_width_layers.data),
+                DataVars.INTERP_MASK: ([Coords.MID_DATE, Coords.Y, Coords.X], interp_mask_layers.data),
+                DataVars.V_ERROR: ([Coords.MID_DATE, Coords.Y, Coords.X], v_error_layers.data),
                 DataVars.URL: ([Coords.MID_DATE], self.urls)
             },
             coords = {Coords.MID_DATE: self.dates,
@@ -535,11 +612,8 @@ class ITSCube:
         # TODO: Sort data by date?
         # self.layers = self.layers.sortby(Coords.MID_DATE)
 
-        # No need for collected velocities pairs anymore (disable if need
-        # to examine collected layers in Jupyter notebook)
-        self.v = None
-        self.vx = None
-        self.vy = None
+        # Don't need original data anymore
+        self.clear_data_variables()
 
     def format_stats(self, num_urls: int):
         """
