@@ -686,8 +686,9 @@ if __name__ == '__main__':
                         help="Dask scheduler to use. One of ['threads', 'processes'].")
     parser.add_argument('-p', '--parallel', action='store_true',
                         help='enable parallel processing')
-    parser.add_argument('-n', '--numberGranules', type=int, required=False, default=100,
-                        help='number of ITS_LIVE granules to consider for the cube (due to runtime limitations)')
+    parser.add_argument('-n', '--numberGranules', type=int, required=False, default=None,
+                        help="number of ITS_LIVE granules to consider for the cube (due to runtime limitations). "
+                             " If none is provided, process all found granules.")
     parser.add_argument('-l', '--localPath', type=str, default=None,
                         help='Local path that stores ITS_LIVE granules')
 
