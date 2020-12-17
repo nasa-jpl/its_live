@@ -3,6 +3,7 @@ import dask
 from dask.distributed import Client, performance_report
 from dask.diagnostics import ProgressBar
 from datetime import datetime, timedelta
+import gc
 import glob
 import os
 import numpy  as np
@@ -31,13 +32,13 @@ class DataVars:
     Data variables for the data cube.
     """
     # Original data variables per ITS_LIVE granules.
-    V               = 'v'
-    VX              = 'vx'
-    VY              = 'vy'
-    CHIP_SIZE_HIGHT = 'chip_size_height'
-    CHIP_SIZE_WIDTH = 'chip_size_width'
-    INTERP_MASK     = 'interp_mask'
-    V_ERROR         = 'v_error'
+    V                = 'v'
+    VX               = 'vx'
+    VY               = 'vy'
+    CHIP_SIZE_HEIGHT = 'chip_size_height'
+    CHIP_SIZE_WIDTH  = 'chip_size_width'
+    INTERP_MASK      = 'interp_mask'
+    V_ERROR          = 'v_error'
 
     # Added for the datacube
     URL = 'url'
@@ -107,7 +108,7 @@ class ITSCube:
         self.v = []
         self.vx = []
         self.vy = []
-        self.chip_size_hight = []
+        self.chip_size_height = []
         self.chip_size_width = []
         self.interp_mask = []
         self.v_error = []
@@ -119,32 +120,30 @@ class ITSCube:
         self.skipped_proj_granules = {}
         # Keep track of skipped granules due to no data for the polygon of interest
         self.skipped_empty_granules = []
+        # Keep track of "double" granules with older processing date which are
+        # not included into the cube
+        self.skipped_double_granules = []
 
         # Constructed cube
         self.layers = None
-
-    def clear_data_variables(self):
-        """
-        Reset all internal data variables (the same as original data variables in granules).
-        """
-        self.v = []
-        self.vx = []
-        self.vy = []
-        self.chip_size_hight = []
-        self.chip_size_width = []
-        self.interp_mask = []
-        self.v_error = []
 
     def clear(self):
         """
         Reset all internal data structures.
         """
-        self.clear_data_variables()
+        self.v = []
+        self.vx = []
+        self.vy = []
+        self.chip_size_height = []
+        self.chip_size_width = []
+        self.interp_mask = []
+        self.v_error = []
 
         self.dates = []
         self.urls = []
         self.skipped_proj_granules = {}
         self.skipped_empty_granules = []
+        self.skipped_double_granules = []
         self.layers = None
 
     def request_granules(self, api_params: dict, num_granules: int):
@@ -185,12 +184,11 @@ class ITSCube:
         """
         Examine the layer if it qualifies to be added as a cube layer.
         """
-        v, vx, vy, chip_size_hight, chip_size_width, interp_mask, v_error = data
+        v, vx, vy, chip_size_height, chip_size_width, interp_mask, v_error = data
         if v is not None:
             # If there's a layer for the mid_date already, pick the one
             # with newer processing date
             if mid_date in self.dates:
-                print(f"Found another granule {url} for existing {mid_date} in layers")
                 index = self.dates.index(mid_date)
                 found_url = self.urls[index]
 
@@ -219,18 +217,20 @@ class ITSCube:
                 if url_proc_date_1 >= found_url_proc_date_1 and \
                    url_proc_date_2 >= found_url_proc_date_2:
                     # Replace the granule with newer processed one
-                    print(f"Replacing data for {mid_date} layer: {found_url} by {url}")
                     self.v[index] = v
                     self.vx[index] = vx
                     self.vy[index] = vy
-                    self.chip_size_hight[index] = chip_size_hight
+                    self.chip_size_height[index] = chip_size_height
                     self.chip_size_width[index] = chip_size_width
                     self.interp_mask[index] = interp_mask
                     self.v_error[index] = v_error
 
                     self.urls[index] = url
+                    self.skipped_double_granules.append(found_url)
+
                 else:
-                    print(f"Keeping data for {mid_date} layer: {found_url} instead of new granule {url}")
+                    # New granule has older processing date, don't include
+                    self.skipped_double_granules.append(url)
 
             else:
                 # print(f"Adding {url} for {mid_date}")
@@ -238,7 +238,7 @@ class ITSCube:
                 self.v.append(v)
                 self.vx.append(vx)
                 self.vy.append(vy)
-                self.chip_size_hight.append(chip_size_hight)
+                self.chip_size_height.append(chip_size_height)
                 self.chip_size_width.append(chip_size_width)
                 self.interp_mask.append(interp_mask)
                 self.v_error.append(v_error)
@@ -326,8 +326,14 @@ class ITSCube:
                 num_workers=ITSCube.NUM_THREADS
             )
 
+        del tasks
+        gc.collect()
+
         for each_ds in results[0]:
             self.add_layer(*each_ds)
+
+        del results
+        gc.collect()
 
         self.combine_layers()
         self.format_stats(len(found_urls))
@@ -395,6 +401,7 @@ class ITSCube:
 
         tasks = [dask.delayed(self.read_dataset)(os.path.join(dirpath, os.path.basename(each_file))) for each_file in found_urls]
 
+        results = None
         with ProgressBar():
             # Display progress bar
             results = dask.compute(tasks, scheduler=ITSCube.DASK_SCHEDULER, num_workers=ITSCube.NUM_THREADS)
@@ -443,6 +450,7 @@ class ITSCube:
         found_urls = glob.glob(dirpath + os.sep + '*.nc')
 
         tasks = [dask.delayed(self.read_dataset)(each_file) for each_file in found_urls]
+        results = None
         with ProgressBar():
             # Display progress bar
             results = dask.compute(tasks,
@@ -509,6 +517,9 @@ class ITSCube:
             mask_lat = (ds.y >= self.y.min) & (ds.y <= self.y.max)
             mask_data = ds.where(mask_lon & mask_lat, drop=True)
 
+            # Another way to filter:
+            # cube_v = ds.v.sel(x=slice(self.x.min, self.x.max),y=slice(self.y.max, self.y.min)).copy()
+
             # Get data variables for the polygon
             cube_v = mask_data.v
             cube_vx = mask_data.vx
@@ -518,10 +529,6 @@ class ITSCube:
             cube_interp_mask = mask_data.interp_mask
             if DataVars.V_ERROR in mask_data:
                 cube_v_error = mask_data.v_error
-
-
-            # Another way to filter:
-            # cube_v = ds.v.sel(x=slice(self.x.min, self.x.max),y=slice(self.y.max, self.y.min)).copy()
 
             # If it's a valid velocity layer, add it to the cube.
             if np.any(cube_v.notnull()):
@@ -574,46 +581,62 @@ class ITSCube:
         mid_date_coord = pd.Index(self.dates, name=Coords.MID_DATE)
 
         v_layers = xr.concat(self.v, mid_date_coord)
-        vx_layers = xr.concat(self.vx, mid_date_coord)
-        vy_layers = xr.concat(self.vy, mid_date_coord)
-        chip_size_hight_layers = xr.concat(self.chip_size_hight, mid_date_coord)
-        chip_size_width_layers = xr.concat(self.chip_size_width, mid_date_coord)
-        interp_mask_layers = xr.concat(self.interp_mask, mid_date_coord)
-        v_error_layers = xr.concat(self.v_error, mid_date_coord)
+
+        # TODO: Should keep attributes per each layer's array or create
+        #       attributes at the top level?
+        self.layers = xr.Dataset(
+            data_vars = {DataVars.URL: ([Coords.MID_DATE], self.urls)},
+            coords = {
+                Coords.MID_DATE: self.dates,
+                Coords.X: v_layers.coords[Coords.X],
+                Coords.Y: v_layers.coords[Coords.Y]
+            },
+            attrs = {
+                'title': 'ITS_LIVE datacube of velocity pairs',
+                'author': 'Alex S. Gardner, JPL/NASA',
+                'institution': 'NASA Jet Propulsion Laboratory (JPL), California Institute of Technology',
+                'GDAL_AREA_OR_POINT': 'Area',
+                'projection': str(self.projection)
+            }
+        )
+
+        # Assign one data variable at a time to avoid running out of memory
+        self.layers[DataVars.VX] = v_layers
+        del v_layers
+        self.v = None
+        gc.collect()
+
+        # vx_layers = xr.concat(self.vx, mid_date_coord)
+        self.layers[DataVars.VX] = xr.concat(self.vx, mid_date_coord)
+        self.vx = None
+        gc.collect()
+
+        # vy_layers = xr.concat(self.vy, mid_date_coord)
+        self.layers[DataVars.VY] = xr.concat(self.vy, mid_date_coord)
+        self.vy = None
+        gc.collect()
+
+        self.layers[DataVars.CHIP_SIZE_HEIGHT] = xr.concat(self.chip_size_height, mid_date_coord)
+        self.chip_size_height = None
+        gc.collect()
+
+        self.layers[DataVars.CHIP_SIZE_WIDTH] = xr.concat(self.chip_size_width, mid_date_coord)
+        self.chip_size_width = None
+        gc.collect()
+
+        self.layers[DataVars.INTERP_MASK] = xr.concat(self.interp_mask, mid_date_coord)
+        self.interp_mask = None
+        gc.collect()
+
+        self.layers[DataVars.V_ERROR] = xr.concat(self.v_error, mid_date_coord)
+        self.v_error = None
+        gc.collect()
 
         time_delta = timeit.default_timer() - start_time
         print(f"Combined {len(self.dates)} layers by date (took {time_delta} seconds)")
 
-        # TODO: Should keep attributes per each layer's array or create
-        #       attributes at the top level?
-        # TODO: Cludgy way of introducing x and y coordinates to the Dataset?
-        #       Ask the group if there is another known way to do it.
-        self.layers = xr.Dataset(
-            data_vars = {
-                DataVars.V: ([Coords.MID_DATE, Coords.Y, Coords.X], v_layers.data),
-                DataVars.VX: ([Coords.MID_DATE, Coords.Y, Coords.X], vx_layers.data),
-                DataVars.VY: ([Coords.MID_DATE, Coords.Y, Coords.X], vy_layers.data),
-                DataVars.CHIP_SIZE_HIGHT: ([Coords.MID_DATE, Coords.Y, Coords.X], chip_size_hight_layers.data),
-                DataVars.CHIP_SIZE_WIDTH: ([Coords.MID_DATE, Coords.Y, Coords.X], chip_size_width_layers.data),
-                DataVars.INTERP_MASK: ([Coords.MID_DATE, Coords.Y, Coords.X], interp_mask_layers.data),
-                DataVars.V_ERROR: ([Coords.MID_DATE, Coords.Y, Coords.X], v_error_layers.data),
-                DataVars.URL: ([Coords.MID_DATE], self.urls)
-            },
-            coords = {Coords.MID_DATE: self.dates,
-                      Coords.X: v_layers.coords[Coords.X],
-                      Coords.Y: v_layers.coords[Coords.Y]},
-            attrs = {'title': 'ITS_LIVE datacube of velocity pairs',
-                     'author': 'Alex S. Gardner, JPL/NASA',
-                     'institution': 'NASA Jet Propulsion Laboratory (JPL), California Institute of Technology',
-                     'GDAL_AREA_OR_POINT': 'Area',
-                     'projection': str(self.projection)}
-        )
-
         # TODO: Sort data by date?
         # self.layers = self.layers.sortby(Coords.MID_DATE)
-
-        # Don't need original data anymore
-        self.clear_data_variables()
 
     def format_stats(self, num_urls: int):
         """
@@ -625,6 +648,7 @@ class ITSCube:
         print( "Skipped granules:")
         print(f"      empty data       : {len(self.skipped_empty_granules)} ({100.0 * len(self.skipped_empty_granules)/num_urls}%)")
         print(f"      wrong projection : {sum_projs} ({100.0 * sum_projs/num_urls}%)")
+        print(f"      double mid_date  : {len(self.skipped_double_granules)} ({100.0 * len(self.skipped_double_granules)/num_urls}%)")
         if len(self.skipped_proj_granules):
             print(f"      wrong projections: {sorted(self.skipped_proj_granules.keys())}")
 
