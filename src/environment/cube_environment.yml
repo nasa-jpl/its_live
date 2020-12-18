@@ -37,6 +37,7 @@ dependencies:
 - s3fs
 - tqdm
 - utm
+- zarr
 - pip
 - pip:
   - area
