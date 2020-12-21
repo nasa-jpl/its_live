@@ -115,6 +115,7 @@ class ITSCube:
 
         self.dates = []
         self.urls = []
+        self.num_urls_from_api = None
 
         # Keep track of skipped granules due to the other than target projection
         self.skipped_proj_granules = {}
@@ -141,6 +142,7 @@ class ITSCube:
 
         self.dates = []
         self.urls = []
+        self.num_urls_from_api = None
         self.skipped_proj_granules = {}
         self.skipped_empty_granules = []
         self.skipped_double_granules = []
@@ -157,7 +159,6 @@ class ITSCube:
             TODO: This is a temporary solution to a very long time to open remote granules.
                   Should not be used when running the code in production mode.
         """
-
         # Append polygon information to API's parameters
         params = copy.deepcopy(api_params)
         params['polygon'] = ",".join([str(each) for each in self.polygon_coords])
@@ -178,7 +179,66 @@ class ITSCube:
             found_urls = found_urls[:num_granules]
             print(f"Examining only first {len(found_urls)} out of {total_num} found granules")
 
-        return found_urls
+        # Original number of URLs as found by search API
+        self.num_urls_from_api = len(found_urls)
+
+        # Need to remove duplicate granules for the middle date: some granules
+        # have newer processing date, keep those.
+        url_mid_dates = []
+        keep_urls = []
+        self.skipped_double_granules = []
+        for each_url in found_urls:
+            # Extract acquisition and processing dates
+            url_acq_date_1, url_proc_date_1, url_acq_date_2, url_proc_date_2 = \
+                ITSCube.get_dates_from_filename(each_url)
+
+            day_separation = (url_acq_date_1 - url_acq_date_2).days
+            mid_date = url_acq_date_2 + timedelta(days=day_separation/2, milliseconds=day_separation)
+
+            # There is a granule for the mid_date already, check which processing
+            # time is newer, keep the one with newer processing date
+            if mid_date in url_mid_dates:
+                index = url_mid_dates.index(mid_date)
+                found_url = keep_urls[index]
+
+                found_url_acq_date_1, found_url_proc_date_1, found_url_acq_date_2, found_url_proc_date_2 = \
+                    ITSCube.get_dates_from_filename(found_url)
+
+                # It is allowed for the same image pair only
+                if url_acq_date_1 != found_url_acq_date_1 or \
+                    url_acq_date_2 != found_url_acq_date_2:
+                    raise RuntimeError(f"Found duplicate granule for {mid_date} that differs in acquisition time: {url_acq_date_1} != {found_url_acq_date_1} or {url_acq_date_2} != {found_url_acq_date_2} ({each_url} vs. {found_url})")
+
+                if url_proc_date_1 >= found_url_proc_date_1 and \
+                   url_proc_date_2 >= found_url_proc_date_2:
+                    # Replace the granule with newer processed one
+                    keep_urls[index] = each_url
+                    self.skipped_double_granules.append(found_url)
+
+                else:
+                    # New granule has older processing date, don't include
+                    self.skipped_double_granules.append(each_url)
+
+            else:
+                # This is new mid_date, append information
+                url_mid_dates.append(mid_date)
+                keep_urls.append(each_url)
+
+        return keep_urls
+
+    @staticmethod
+    def get_dates_from_filename(filename):
+        """
+        Extract acquisition and processing dates for two images from the filename.
+        """
+        # Get acquisition and processing date for both images from url and index_url
+        url_tokens = os.path.basename(filename).split('_')
+        url_acq_date_1 = datetime.strptime(url_tokens[3], ITSCube.DATE_FORMAT)
+        url_proc_date_1 = datetime.strptime(url_tokens[4], ITSCube.DATE_FORMAT)
+        url_acq_date_2 = datetime.strptime(url_tokens[11], ITSCube.DATE_FORMAT)
+        url_proc_date_2 = datetime.strptime(url_tokens[12], ITSCube.DATE_FORMAT)
+
+        return url_acq_date_1, url_proc_date_1, url_acq_date_2, url_proc_date_2
 
     def add_layer(self, is_empty, layer_projection, mid_date, url, data):
         """
@@ -186,64 +246,21 @@ class ITSCube:
         """
         v, vx, vy, chip_size_height, chip_size_width, interp_mask, v_error = data
         if v is not None:
-            # If there's a layer for the mid_date already, pick the one
-            # with newer processing date
-            if mid_date in self.dates:
-                index = self.dates.index(mid_date)
-                found_url = self.urls[index]
+            # TODO: Handle "duplicate" granules for the mid_date if concatenating
+            #       to existing cube.
+            #       "Duplicate" granules are handled apriori for newly constructed
+            #       cubes (see self.request_granules() method).
+            # print(f"Adding {url} for {mid_date}")
+            self.dates.append(mid_date)
+            self.v.append(v)
+            self.vx.append(vx)
+            self.vy.append(vy)
+            self.chip_size_height.append(chip_size_height)
+            self.chip_size_width.append(chip_size_width)
+            self.interp_mask.append(interp_mask)
+            self.v_error.append(v_error)
 
-                # Get acquisition and processing date for both images from url and index_url
-                url_tokens = os.path.basename(url).split('_')
-                url_acq_date_1 = datetime.strptime(url_tokens[3], ITSCube.DATE_FORMAT).date()
-                url_proc_date_1 = datetime.strptime(url_tokens[4], ITSCube.DATE_FORMAT).date()
-                url_acq_date_2 = datetime.strptime(url_tokens[11], ITSCube.DATE_FORMAT).date()
-                url_proc_date_2 = datetime.strptime(url_tokens[12], ITSCube.DATE_FORMAT).date()
-
-                found_url_tokens = os.path.basename(found_url).split('_')
-                found_url_acq_date_1 = datetime.strptime(found_url_tokens[3],ITSCube.DATE_FORMAT).date()
-                found_url_proc_date_1 = datetime.strptime(found_url_tokens[4], ITSCube.DATE_FORMAT).date()
-                found_url_acq_date_2 = datetime.strptime(found_url_tokens[11], ITSCube.DATE_FORMAT).date()
-                found_url_proc_date_2 = datetime.strptime(found_url_tokens[12],ITSCube.DATE_FORMAT).date()
-
-                # It is allowed for the same image pair only
-                if url_acq_date_1 != found_url_acq_date_1 or \
-                    url_acq_date_2 != found_url_acq_date_2:
-                    raise RuntimeError(
-                        f"Found duplicate granule for {mid_date} that differs in image acquisition time: "
-                        "{url_acq_date_1} != {found_url_acq_date_1} or "
-                        "{url_acq_date_2} != {found_url_acq_date_2} "
-                        "({url} vs. {found_url})"
-                    )
-                if url_proc_date_1 >= found_url_proc_date_1 and \
-                   url_proc_date_2 >= found_url_proc_date_2:
-                    # Replace the granule with newer processed one
-                    self.v[index] = v
-                    self.vx[index] = vx
-                    self.vy[index] = vy
-                    self.chip_size_height[index] = chip_size_height
-                    self.chip_size_width[index] = chip_size_width
-                    self.interp_mask[index] = interp_mask
-                    self.v_error[index] = v_error
-
-                    self.urls[index] = url
-                    self.skipped_double_granules.append(found_url)
-
-                else:
-                    # New granule has older processing date, don't include
-                    self.skipped_double_granules.append(url)
-
-            else:
-                # print(f"Adding {url} for {mid_date}")
-                self.dates.append(mid_date)
-                self.v.append(v)
-                self.vx.append(vx)
-                self.vy.append(vy)
-                self.chip_size_height.append(chip_size_height)
-                self.chip_size_width.append(chip_size_width)
-                self.interp_mask.append(interp_mask)
-                self.v_error.append(v_error)
-
-                self.urls.append(url)
+            self.urls.append(url)
 
         else:
             if is_empty:
@@ -284,7 +301,7 @@ class ITSCube:
         self.combine_layers()
 
         # Report statistics for skipped granules
-        self.format_stats(len(found_urls))
+        self.format_stats()
 
         return found_urls
 
@@ -336,7 +353,7 @@ class ITSCube:
         gc.collect()
 
         self.combine_layers()
-        self.format_stats(len(found_urls))
+        self.format_stats()
 
         return found_urls
 
@@ -377,7 +394,7 @@ class ITSCube:
                 self.add_layer(*results)
 
         self.combine_layers()
-        self.format_stats(len(found_urls))
+        self.format_stats()
 
         return found_urls
 
@@ -410,7 +427,7 @@ class ITSCube:
             self.add_layer(*each_ds)
 
         self.combine_layers()
-        self.format_stats(len(found_urls))
+        self.format_stats()
 
         return found_urls
 
@@ -425,6 +442,7 @@ class ITSCube:
         self.clear()
 
         found_urls = glob.glob(dirpath + os.sep + '*.nc')
+        self.num_urls_from_api = len(found_urls)
 
         # Number of granules to examine is specified (it's very slow to examine all granules sequentially)
         for each_url in tqdm(found_urls, ascii=True, desc='Processing local granules'):
@@ -433,7 +451,7 @@ class ITSCube:
                 self.add_layer(*results)
 
         self.combine_layers()
-        self.format_stats(len(found_urls))
+        self.format_stats()
 
         return found_urls
 
@@ -448,6 +466,7 @@ class ITSCube:
         self.clear()
 
         found_urls = glob.glob(dirpath + os.sep + '*.nc')
+        self.num_urls_from_api = len(found_urls)
 
         tasks = [dask.delayed(self.read_dataset)(each_file) for each_file in found_urls]
         results = None
@@ -461,7 +480,7 @@ class ITSCube:
             self.add_layer(*each_ds)
 
         self.combine_layers()
-        self.format_stats(len(found_urls))
+        self.format_stats()
 
         return found_urls
 
@@ -638,10 +657,11 @@ class ITSCube:
         # TODO: Sort data by date?
         # self.layers = self.layers.sortby(Coords.MID_DATE)
 
-    def format_stats(self, num_urls: int):
+    def format_stats(self):
         """
         Format statistics of the run.
         """
+        num_urls = self.num_urls_from_api
         # Total number of skipped granules due to wrong projection
         sum_projs = sum([len(each) for each in self.skipped_proj_granules.values()])
 
