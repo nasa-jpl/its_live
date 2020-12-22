@@ -10,6 +10,7 @@ import numpy  as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import s3fs
+import shutil
 import timeit
 from tqdm import tqdm
 import xarray as xr
@@ -73,6 +74,10 @@ class ITSCube:
     # (LC08_L1TP_011002_20150821_20170405_01_T1_X_LC08_L1TP_011002_20150720_20170406_01_T1_G0240V01_P038.nc)
     DATE_FORMAT = "%Y%m%d"
 
+    # Granules are written to the file in chunks to avoid out of memory issues.
+    # Number of granules to write to the file at a time.
+    NUM_GRANULES_TO_WRITE = 1000
+
     def __init__(self, polygon: tuple, projection: str):
         """
         Initialize object.
@@ -128,10 +133,24 @@ class ITSCube:
         # Constructed cube
         self.layers = None
 
-    def clear(self):
+    def clear_vars(self):
         """
-        Reset all internal data structures.
+        Clear current set of cube layers.
         """
+        self.v = None
+        self.vx = None
+        self.vy = None
+        self.chip_size_height = None
+        self.chip_size_width = None
+        self.interp_mask = None
+        self.v_error = None
+
+        self.layers = None
+        self.dates = []
+        self.urls = []
+
+        gc.collect()
+
         self.v = []
         self.vx = []
         self.vy = []
@@ -140,13 +159,16 @@ class ITSCube:
         self.interp_mask = []
         self.v_error = []
 
-        self.dates = []
-        self.urls = []
+    def clear(self):
+        """
+        Reset all internal data structures.
+        """
+        self.clear_vars()
+
         self.num_urls_from_api = None
         self.skipped_proj_granules = {}
         self.skipped_empty_granules = []
         self.skipped_double_granules = []
-        self.layers = None
 
     def request_granules(self, api_params: dict, num_granules: int):
         """
@@ -179,7 +201,12 @@ class ITSCube:
             found_urls = found_urls[:num_granules]
             print(f"Examining only first {len(found_urls)} out of {total_num} found granules")
 
-        # Original number of URLs as found by search API
+        return self.skip_duplicate_granules(found_urls)
+
+    def skip_duplicate_granules(self, found_urls):
+        """
+        Skip duplicate granules (the ones that have earlier processing date(s)).
+        """
         self.num_urls_from_api = len(found_urls)
 
         # Need to remove duplicate granules for the middle date: some granules
@@ -187,13 +214,14 @@ class ITSCube:
         url_mid_dates = []
         keep_urls = []
         self.skipped_double_granules = []
-        for each_url in found_urls:
+
+        for each_url in tqdm(found_urls, ascii=True, desc='Skipping duplicate granules...'):
             # Extract acquisition and processing dates
-            url_acq_date_1, url_proc_date_1, url_acq_date_2, url_proc_date_2 = \
+            url_acq_1, url_proc_1, url_acq_2, url_proc_2 = \
                 ITSCube.get_dates_from_filename(each_url)
 
-            day_separation = (url_acq_date_1 - url_acq_date_2).days
-            mid_date = url_acq_date_2 + timedelta(days=day_separation/2, milliseconds=day_separation)
+            day_separation = (url_acq_1 - url_acq_2).days
+            mid_date = url_acq_2 + timedelta(days=day_separation/2, milliseconds=day_separation)
 
             # There is a granule for the mid_date already, check which processing
             # time is newer, keep the one with newer processing date
@@ -201,16 +229,16 @@ class ITSCube:
                 index = url_mid_dates.index(mid_date)
                 found_url = keep_urls[index]
 
-                found_url_acq_date_1, found_url_proc_date_1, found_url_acq_date_2, found_url_proc_date_2 = \
+                found_acq_1, found_proc_1, found_acq_2, found_proc_2 = \
                     ITSCube.get_dates_from_filename(found_url)
 
                 # It is allowed for the same image pair only
-                if url_acq_date_1 != found_url_acq_date_1 or \
-                    url_acq_date_2 != found_url_acq_date_2:
-                    raise RuntimeError(f"Found duplicate granule for {mid_date} that differs in acquisition time: {url_acq_date_1} != {found_url_acq_date_1} or {url_acq_date_2} != {found_url_acq_date_2} ({each_url} vs. {found_url})")
+                if url_acq_1 != found_acq_1 or \
+                    url_acq_2 != found_acq_2:
+                    raise RuntimeError(f"Found duplicate granule for {mid_date} that differs in acquisition time: {url_acq_1} != {found_acq_1} or {url_acq_2} != {found_acq_2} ({each_url} vs. {found_url})")
 
-                if url_proc_date_1 >= found_url_proc_date_1 and \
-                   url_proc_date_2 >= found_url_proc_date_2:
+                if url_proc_1 >= found_proc_1 and \
+                   url_proc_2 >= found_proc_2:
                     # Replace the granule with newer processed one
                     keep_urls[index] = each_url
                     self.skipped_double_granules.append(found_url)
@@ -224,6 +252,7 @@ class ITSCube:
                 url_mid_dates.append(mid_date)
                 keep_urls.append(each_url)
 
+        print (f"Keeping {len(keep_urls)} unique granules")
         return keep_urls
 
     @staticmethod
@@ -271,7 +300,7 @@ class ITSCube:
                 # Layer corresponds to other than target projection
                 self.skipped_proj_granules.setdefault(layer_projection, []).append(url)
 
-    def create(self, api_params: dict, num_granules=None):
+    def create(self, api_params: dict, output_dir: str, num_granules=None):
         """
         Create velocity cube.
 
@@ -282,6 +311,9 @@ class ITSCube:
             TODO: This is a temporary solution to a very long time to open remote granules.
                   Should not be used when running the code in production mode.
         """
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+
         self.clear()
 
         found_urls = self.request_granules(api_params, num_granules)
@@ -289,6 +321,7 @@ class ITSCube:
         # Open S3FS access to S3 bucket with input granules
         s3 = s3fs.S3FileSystem(anon=True)
 
+        is_first_write = True
         for each_url in tqdm(found_urls, ascii=True, desc='Reading and processing S3 granules'):
             s3_path = each_url.replace(ITSCube.HTTP_PREFIX, ITSCube.S3_PREFIX)
             s3_path = s3_path.replace(ITSCube.PATH_URL, '')
@@ -298,14 +331,21 @@ class ITSCube:
                     results = self.preprocess_dataset(ds, each_url)
                     self.add_layer(*results)
 
-        self.combine_layers()
+                    # Check if need to write to the file accumulated number of granules
+                    if len(self.urls) == ITSCube.NUM_GRANULES_TO_WRITE:
+                        self.combine_layers(output_dir, is_first_write)
+                        is_first_write = False
+
+        # Check if there are remaining layers to be written to the file
+        if len(self.urls):
+            self.combine_layers(output_dir, is_first_write)
 
         # Report statistics for skipped granules
         self.format_stats()
 
         return found_urls
 
-    def create_parallel(self, api_params: dict, num_granules=None):
+    def create_parallel(self, api_params: dict, output_dir: str, num_granules=None):
         """
         Create velocity cube by reading and pre-processing cube layers in parallel.
 
@@ -316,8 +356,10 @@ class ITSCube:
             TODO: This is a temporary solution to a very long time to open remote granules. Should not be used
                   when running the code at AWS.
         """
-        self.clear()
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
 
+        self.clear()
         found_urls = self.request_granules(api_params, num_granules)
 
         # Parallelize layer collection
@@ -329,109 +371,131 @@ class ITSCube:
         # client = Client(processes=processes_scheduler, n_workers=ITSCube.NUM_THREADS)
         # # Use client to collect profile information
         # client.profile(filename=f"dask-profile-{num_granules}-parallel.html")
-        tasks = [dask.delayed(self.read_s3_dataset)(each_file, s3) for each_file in found_urls]
+        is_first_write = True
+        start = 0
+        num_to_process = len(found_urls)
 
-        with ProgressBar():
-            # Display Dask's progress bar
+        while num_to_process > 0:
+            # How many tasks to process at a time
+            num_tasks = ITSCube.NUM_GRANULES_TO_WRITE if num_to_process > ITSCube.NUM_GRANULES_TO_WRITE else num_to_process
+            tasks = [dask.delayed(self.read_s3_dataset)(each_file, s3) for each_file in found_urls[start:start+num_tasks]]
+            print("Processing NUM tasks: ", len(tasks))
 
-            # If to collect performance report (need to define global Client - see above)
-            # with performance_report(filename=f"dask-report-{num_granules}.html"):
-            #     results = dask.compute(tasks)
-            results = dask.compute(
-                tasks,
-                scheduler=ITSCube.DASK_SCHEDULER,
-                num_workers=ITSCube.NUM_THREADS
-            )
+            results = None
+            with ProgressBar():
+                # If to collect performance report (need to define global Client - see above)
+                # with performance_report(filename=f"dask-report-{num_granules}.html"):
+                #     results = dask.compute(tasks)
+                results = dask.compute(
+                    tasks,
+                    scheduler=ITSCube.DASK_SCHEDULER,
+                    num_workers=ITSCube.NUM_THREADS
+                )
 
-        del tasks
-        gc.collect()
+            del tasks
+            gc.collect()
 
-        for each_ds in results[0]:
-            self.add_layer(*each_ds)
+            for each_ds in results[0]:
+                self.add_layer(*each_ds)
 
-        del results
-        gc.collect()
+            del results
+            gc.collect()
 
-        self.combine_layers()
+            self.combine_layers(output_dir, is_first_write)
+
+            if start == 0:
+                is_first_write = False
+
+            num_to_process -= num_tasks
+            start += num_tasks
+
         self.format_stats()
-
         return found_urls
 
-    def to_netcdf(self, filename: str):
-        """
-        Write datacube to the NetCDF file.
-        """
-        if self.layers is not None:
-            self.layers.to_netcdf(filename, engine=ITSCube.NC_ENGINE, unlimited_dims=(Coords.MID_DATE))
+    # def to_netcdf(self, filename: str):
+    #     """
+    #     Write datacube to the NetCDF file.
+    #     """
+    #     if self.layers is not None:
+    #         self.layers.to_netcdf(filename, engine=ITSCube.NC_ENGINE, unlimited_dims=(Coords.MID_DATE))
+    #
+    #     else:
+    #         raise RuntimeError(f"Datacube data does not exist.")
 
-        else:
-            raise RuntimeError(f"Datacube data does not exist.")
+    # def create_from_local(self, api_params: dict, output_dir: str, num_granules=None, local_path=''):
+    #     """
+    #     Create velocity cube by quering its_live API, but using local copy of the
+    #     granules which are downloaded apriori.
+    #
+    #     api_params: dict
+    #         Search API required parameters.
+    #     num_granules: int
+    #         Number of first granules to examine.
+    #         TODO: This is a temporary solution to a very long time to open remote granules.
+    #               Should not be used when running the code in production mode.
+    #     local_path: str
+    #         Directory where granules files are downloaded to.
+    #     """
+    #     if os.path.exists(output_dir):
+    #         shutil.rmtree(output_dir)
+    #
+    #     self.clear()
+    #     found_urls = self.request_granules(api_params, num_granules)
+    #
+    #     is_first_write = True
+    #     for each_url in tqdm(found_urls, ascii=True, desc='Reading and processing S3 granules'):
+    #         s3_file = os.path.basename(each_url)
+    #         s3_path = os.path.join(local_path, s3_file)
+    #
+    #         with xr.open_dataset(s3_path) as ds:
+    #             results = self.preprocess_dataset(ds, each_url)
+    #             self.add_layer(*results)
+    #
+    #             # Check if need to write to the file accumulated number of granules
+    #             if len(self.urls) == ITSCube.NUM_GRANULES_TO_WRITE:
+    #                 self.combine_layers(output_dir, is_first_write)
+    #                 is_first_write = False
+    #
+    #     # Check if there are remaining layers to be written to the file
+    #     if len(self.urls):
+    #         self.combine_layers(output_dir, is_first_write)
+    #
+    #     self.format_stats()
+    #
+    #     return found_urls
+    #
+    # def create_from_local_parallel(self, api_params: dict, output_dir: str, num_granules=None, dirpath='data'):
+    #     """
+    #     Create velocity cube from local data in parallel.
+    #
+    #     api_params: dict
+    #         Search API required parameters.
+    #     num_granules: int
+    #         Number of first granules to examine.
+    #         TODO: This is a temporary solution to a very long time to open remote granules.
+    #               Should not be used when running the code in production mode.
+    #     dirpath: str
+    #         Directory that stores granules files. Default is 'data' sub-directory
+    #         accessible from the directory the code is running from.
+    #     """
+    #     self.clear()
+    #     found_urls = self.request_granules(api_params, num_granules)
+    #     tasks = [dask.delayed(self.read_dataset)(os.path.join(dirpath, os.path.basename(each_file))) for each_file in found_urls]
+    #
+    #     results = None
+    #     with ProgressBar():
+    #         # Display progress bar
+    #         results = dask.compute(tasks, scheduler=ITSCube.DASK_SCHEDULER, num_workers=ITSCube.NUM_THREADS)
+    #
+    #     for each_ds in results[0]:
+    #         self.add_layer(*each_ds)
+    #
+    #     self.combine_layers()
+    #     self.format_stats()
+    #
+    #     return found_urls
 
-    def create_from_local(self, api_params: dict, num_granules=None, local_path=''):
-        """
-        Create velocity cube by quering its_live API, but using local copy of the
-        granules which are downloaded apriori.
-
-        api_params: dict
-            Search API required parameters.
-        num_granules: int
-            Number of first granules to examine.
-            TODO: This is a temporary solution to a very long time to open remote granules.
-                  Should not be used when running the code in production mode.
-        local_path: str
-            Directory where granules files are downloaded to.
-        """
-        self.clear()
-
-        found_urls = self.request_granules(api_params, num_granules)
-
-        for each_url in tqdm(found_urls, ascii=True, desc='Reading and processing S3 granules'):
-            s3_file = os.path.basename(each_url)
-            s3_path = os.path.join(local_path, s3_file)
-
-            with xr.open_dataset(s3_path) as ds:
-                results = self.preprocess_dataset(ds, each_url)
-                self.add_layer(*results)
-
-        self.combine_layers()
-        self.format_stats()
-
-        return found_urls
-
-    def create_from_local_parallel(self, api_params: dict, num_granules=None, dirpath='data'):
-        """
-        Create velocity cube from local data in parallel.
-
-        api_params: dict
-            Search API required parameters.
-        num_granules: int
-            Number of first granules to examine.
-            TODO: This is a temporary solution to a very long time to open remote granules.
-                  Should not be used when running the code in production mode.
-        dirpath: str
-            Directory that stores granules files. Default is 'data' sub-directory
-            accessible from the directory the code is running from.
-        """
-        self.clear()
-
-        found_urls = self.request_granules(api_params, num_granules)
-
-        tasks = [dask.delayed(self.read_dataset)(os.path.join(dirpath, os.path.basename(each_file))) for each_file in found_urls]
-
-        results = None
-        with ProgressBar():
-            # Display progress bar
-            results = dask.compute(tasks, scheduler=ITSCube.DASK_SCHEDULER, num_workers=ITSCube.NUM_THREADS)
-
-        for each_ds in results[0]:
-            self.add_layer(*each_ds)
-
-        self.combine_layers()
-        self.format_stats()
-
-        return found_urls
-
-    def create_from_local_no_api(self, dirpath='data'):
+    def create_from_local_no_api(self, output_dir: str, dirpath='data'):
         """
         Create velocity cube by accessing local data stored in "dirpath" directory.
 
@@ -439,23 +503,33 @@ class ITSCube:
             Directory that stores granules files. Default is 'data' sub-directory
             accessible from the directory the code is running from.
         """
-        self.clear()
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
 
+        self.clear()
         found_urls = glob.glob(dirpath + os.sep + '*.nc')
-        self.num_urls_from_api = len(found_urls)
+        found_urls = self.skip_duplicate_granules(found_urls)
+        is_first_write = True
 
         # Number of granules to examine is specified (it's very slow to examine all granules sequentially)
         for each_url in tqdm(found_urls, ascii=True, desc='Processing local granules'):
             with xr.open_dataset(each_url) as ds:
                 results = self.preprocess_dataset(ds, each_url)
                 self.add_layer(*results)
+                # Check if need to write to the file accumulated number of granules
+                if len(self.urls) == ITSCube.NUM_GRANULES_TO_WRITE:
+                    self.combine_layers(output_dir, is_first_write)
+                    is_first_write = False
 
-        self.combine_layers()
+        # Check if there are remaining layers to be written to the file
+        if len(self.urls):
+            self.combine_layers(output_dir, is_first_write)
+
         self.format_stats()
 
         return found_urls
 
-    def create_from_local_parallel_no_api(self, dirpath='data'):
+    def create_from_local_parallel_no_api(self, output_dir: str, dirpath='data'):
         """
         Create velocity cube from local data stored in "dirpath" in parallel.
 
@@ -463,23 +537,43 @@ class ITSCube:
             Directory that stores granules files. Default is 'data' sub-directory
             accessible from the directory the code is running from.
         """
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+
         self.clear()
-
         found_urls = glob.glob(dirpath + os.sep + '*.nc')
-        self.num_urls_from_api = len(found_urls)
+        found_urls = self.skip_duplicate_granules(found_urls)
 
-        tasks = [dask.delayed(self.read_dataset)(each_file) for each_file in found_urls]
-        results = None
-        with ProgressBar():
-            # Display progress bar
-            results = dask.compute(tasks,
-                                   scheduler=ITSCube.DASK_SCHEDULER,
-                                   num_workers=ITSCube.NUM_THREADS)
+        num_to_process = len(found_urls)
 
-        for each_ds in results[0]:
-            self.add_layer(*each_ds)
+        is_first_write = True
+        start = 0
+        while num_to_process > 0:
+            # How many tasks to process at a time
+            num_tasks = ITSCube.NUM_GRANULES_TO_WRITE if num_to_process > ITSCube.NUM_GRANULES_TO_WRITE else num_to_process
+            print("NUM to process: ", num_tasks)
 
-        self.combine_layers()
+            tasks = [dask.delayed(self.read_dataset)(each_file) for each_file in found_urls[start:start+num_tasks]]
+            assert len(tasks) == num_tasks
+            results = None
+
+            with ProgressBar():
+                # Display progress bar
+                results = dask.compute(tasks,
+                                       scheduler=ITSCube.DASK_SCHEDULER,
+                                       num_workers=ITSCube.NUM_THREADS)
+
+            for each_ds in results[0]:
+                self.add_layer(*each_ds)
+
+            self.combine_layers(output_dir, is_first_write)
+
+            if start == 0:
+                is_first_write = False
+
+            num_to_process -= num_tasks
+            start += num_tasks
+
         self.format_stats()
 
         return found_urls
@@ -588,14 +682,15 @@ class ITSCube:
             (cube_v, cube_vx, cube_vy, cube_chip_size_height, cube_chip_size_width, \
              cube_interp_mask, cube_v_error)
 
-    def combine_layers(self):
+    def combine_layers(self, output_dir, is_first_write=False):
         """
-        Combine selected layers into one xr.Dataset object.
+        Combine selected layers into one xr.Dataset object and write (append) it
+        to the Zarr store.
         """
         self.layers = {}
 
         # Construct xarray to hold layers by concatenating layer objects along 'mid_date' dimension
-        print('Combining layers by date...')
+        print(f'Combine {len(self.urls)} layers to the {output_dir}...')
         start_time = timeit.default_timer()
         mid_date_coord = pd.Index(self.dates, name=Coords.MID_DATE)
 
@@ -620,7 +715,7 @@ class ITSCube:
         )
 
         # Assign one data variable at a time to avoid running out of memory
-        self.layers[DataVars.VX] = v_layers
+        self.layers[DataVars.V] = v_layers
         del v_layers
         self.v = None
         gc.collect()
@@ -652,7 +747,23 @@ class ITSCube:
         gc.collect()
 
         time_delta = timeit.default_timer() - start_time
-        print(f"Combined {len(self.dates)} layers by date (took {time_delta} seconds)")
+        print(f"Combined {len(self.urls)} layers (took {time_delta} seconds)")
+
+        start_time = timeit.default_timer()
+        # Write to the Zarr store
+        if is_first_write:
+            # This is first write, create Zarr store
+            self.layers.to_zarr(output_dir)
+
+        else:
+            # Append layers to existing Zarr store
+            self.layers.to_zarr(output_dir, append_dim=Coords.MID_DATE)
+
+        time_delta = timeit.default_timer() - start_time
+        print(f"Wrote {len(self.urls)} layers to {output_dir} (took {time_delta} seconds)")
+
+        # Free up memory
+        self.clear_vars()
 
         # TODO: Sort data by date?
         # self.layers = self.layers.sortby(Coords.MID_DATE)
@@ -690,7 +801,8 @@ class ITSCube:
             with xr.open_dataset(fhandle, engine=ITSCube.NC_ENGINE) as ds:
                 return self.preprocess_dataset(ds, each_url)
 
-    def plot(self, variable, boundaries: tuple = None):
+    @staticmethod
+    def plot(cube, variable, boundaries: tuple = None):
         """
         Plot cube's layers data. All layers share the same x/y coordinate labels.
         There is an option to display only a subset of layers by specifying
@@ -698,7 +810,7 @@ class ITSCube:
         """
         if boundaries is not None:
             start, end = boundaries
-            self.layers[variable][start:end].plot(
+            cube[variable][start:end].plot(
                 x=Coords.X,
                 y=Coords.Y,
                 col=Coords.MID_DATE,
@@ -706,7 +818,7 @@ class ITSCube:
                 levels=100)
 
         else:
-            self.layers[variable].plot(
+            cube[variable].plot(
                 x=Coords.X,
                 y=Coords.Y,
                 col=Coords.MID_DATE,
@@ -727,7 +839,7 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--threads', type=int, default=4,
                         help='number of threads to use for parallel processing.')
     parser.add_argument('-s', '--scheduler', type=str, default="processes",
-                        help="Dask scheduler to use. One of ['threads', 'processes'].")
+                        help="Dask scheduler to use. One of ['threads', 'processes'] (effective only when -p option is specified).")
     parser.add_argument('-p', '--parallel', action='store_true',
                         help='enable parallel processing')
     parser.add_argument('-n', '--numberGranules', type=int, required=False, default=None,
@@ -735,10 +847,15 @@ if __name__ == '__main__':
                              " If none is provided, process all found granules.")
     parser.add_argument('-l', '--localPath', type=str, default=None,
                         help='Local path that stores ITS_LIVE granules')
+    parser.add_argument('-o', '--outputDir', type=str, default="cubedata.zarr",
+                        help="Zarr output directory to write cube data to. Default is 'cubedata.zarr'.")
+    parser.add_argument('-c', '--chunks', type=int, default=1000,
+                        help="Number of granules to write at a time. Default is 1000.")
 
     args = parser.parse_args()
     ITSCube.NUM_THREADS = args.threads
     ITSCube.DASK_SCHEDULER = args.scheduler
+    ITSCube.NUM_GRANULES_TO_WRITE = args.chunks
 
     # Test Case from itscube.ipynb:
     # =============================
@@ -775,20 +892,20 @@ if __name__ == '__main__':
         print("Processing granules sequentially...")
         if args.localPath:
             # Granules are downloaded locally
-            cube.create_from_local(API_params, args.numberGranules, args.localPath)
+            cube.create_from_local(API_params, args.outputDir, args.numberGranules, args.localPath)
 
         else:
-            cube.create(API_params, args.numberGranules)
+            cube.create(API_params, args.outputDir, args.numberGranules)
 
     else:
         # Process ITS_LIVE granules in parallel, look at 100 first granules only
         print("Processing granules in parallel...")
         if args.localPath:
             # Granules are downloaded locally
-            cube.create_from_local_parallel(API_params, args.numberGranules, args.localPath)
+            cube.create_from_local_parallel(API_params, args.outputDir, args.numberGranules, args.localPath)
 
         else:
-            cube.create_parallel(API_params, args.numberGranules)
+            cube.create_parallel(API_params, args.outputDir, args.numberGranules)
 
     # Write cube data to the NetCDF file
-    cube.to_netcdf('test_v_cube.nc')
+    # cube.to_netcdf('test_v_cube.nc')
