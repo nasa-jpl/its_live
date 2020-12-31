@@ -263,7 +263,7 @@ class ITSCube:
         Examine the layer if it qualifies to be added as a cube layer.
         """
 
-        if data.v is not None:
+        if data is not None:
             # TODO: Handle "duplicate" granules for the mid_date if concatenating
             #       to existing cube.
             #       "Duplicate" granules are handled apriori for newly constructed
