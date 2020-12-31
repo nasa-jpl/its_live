@@ -32,8 +32,12 @@ class DataVars:
     """
     Data variables for the data cube.
     """
-    # Original data variables per ITS_LIVE granules.
-    V                = 'v'
+    # Original data variables and their attributes per ITS_LIVE granules.
+    V                   = 'v'
+    # V attributes
+    GRID_MAPPING        = 'grid_mapping'
+    MAP_SCALE_CORRECTED = 'map_scale_corrected'
+
     VX               = 'vx'
     VY               = 'vy'
     CHIP_SIZE_HEIGHT = 'chip_size_height'
@@ -43,6 +47,9 @@ class DataVars:
 
     # Added for the datacube
     URL = 'url'
+
+    MISSING_BYTE = 0
+    MISSING_VALUE = -32767.0
 
 
 class ITSCube:
@@ -110,13 +117,7 @@ class ITSCube:
         # Lists to store filtered by region/start_date/end_date velocity pairs
         # and corresponding metadata (middle dates (+ date separation in days as milliseconds),
         # original granules URLs)
-        self.v = []
-        self.vx = []
-        self.vy = []
-        self.chip_size_height = []
-        self.chip_size_width = []
-        self.interp_mask = []
-        self.v_error = []
+        self.ds = []
 
         self.dates = []
         self.urls = []
@@ -137,13 +138,7 @@ class ITSCube:
         """
         Clear current set of cube layers.
         """
-        self.v = None
-        self.vx = None
-        self.vy = None
-        self.chip_size_height = None
-        self.chip_size_width = None
-        self.interp_mask = None
-        self.v_error = None
+        self.ds = None
 
         self.layers = None
         self.dates = []
@@ -151,13 +146,7 @@ class ITSCube:
 
         gc.collect()
 
-        self.v = []
-        self.vx = []
-        self.vy = []
-        self.chip_size_height = []
-        self.chip_size_width = []
-        self.interp_mask = []
-        self.v_error = []
+        self.ds = []
 
     def clear(self):
         """
@@ -273,22 +262,15 @@ class ITSCube:
         """
         Examine the layer if it qualifies to be added as a cube layer.
         """
-        v, vx, vy, chip_size_height, chip_size_width, interp_mask, v_error = data
-        if v is not None:
+
+        if data.v is not None:
             # TODO: Handle "duplicate" granules for the mid_date if concatenating
             #       to existing cube.
             #       "Duplicate" granules are handled apriori for newly constructed
             #       cubes (see self.request_granules() method).
             # print(f"Adding {url} for {mid_date}")
             self.dates.append(mid_date)
-            self.v.append(v)
-            self.vx.append(vx)
-            self.vy.append(vy)
-            self.chip_size_height.append(chip_size_height)
-            self.chip_size_width.append(chip_size_width)
-            self.interp_mask.append(interp_mask)
-            self.v_error.append(v_error)
-
+            self.ds.append(data)
             self.urls.append(url)
 
         else:
@@ -379,7 +361,7 @@ class ITSCube:
             # How many tasks to process at a time
             num_tasks = ITSCube.NUM_GRANULES_TO_WRITE if num_to_process > ITSCube.NUM_GRANULES_TO_WRITE else num_to_process
             tasks = [dask.delayed(self.read_s3_dataset)(each_file, s3) for each_file in found_urls[start:start+num_tasks]]
-            print("Processing NUM tasks: ", len(tasks))
+            print(f"Processing {len(tasks)} tasks")
 
             results = None
             with ProgressBar():
@@ -412,88 +394,16 @@ class ITSCube:
         self.format_stats()
         return found_urls
 
-    # def to_netcdf(self, filename: str):
-    #     """
-    #     Write datacube to the NetCDF file.
-    #     """
-    #     if self.layers is not None:
-    #         self.layers.to_netcdf(filename, engine=ITSCube.NC_ENGINE, unlimited_dims=(Coords.MID_DATE))
-    #
-    #     else:
-    #         raise RuntimeError(f"Datacube data does not exist.")
+    @staticmethod
+    def ds_to_netcdf(ds: xr.Dataset, filename: str):
+        """
+        Write datacube xarray.Dataset to the NetCDF file.
+        """
+        if ds is not None:
+            ds.to_netcdf(filename, engine=ITSCube.NC_ENGINE, unlimited_dims=(Coords.MID_DATE))
 
-    # def create_from_local(self, api_params: dict, output_dir: str, num_granules=None, local_path=''):
-    #     """
-    #     Create velocity cube by quering its_live API, but using local copy of the
-    #     granules which are downloaded apriori.
-    #
-    #     api_params: dict
-    #         Search API required parameters.
-    #     num_granules: int
-    #         Number of first granules to examine.
-    #         TODO: This is a temporary solution to a very long time to open remote granules.
-    #               Should not be used when running the code in production mode.
-    #     local_path: str
-    #         Directory where granules files are downloaded to.
-    #     """
-    #     if os.path.exists(output_dir):
-    #         shutil.rmtree(output_dir)
-    #
-    #     self.clear()
-    #     found_urls = self.request_granules(api_params, num_granules)
-    #
-    #     is_first_write = True
-    #     for each_url in tqdm(found_urls, ascii=True, desc='Reading and processing S3 granules'):
-    #         s3_file = os.path.basename(each_url)
-    #         s3_path = os.path.join(local_path, s3_file)
-    #
-    #         with xr.open_dataset(s3_path) as ds:
-    #             results = self.preprocess_dataset(ds, each_url)
-    #             self.add_layer(*results)
-    #
-    #             # Check if need to write to the file accumulated number of granules
-    #             if len(self.urls) == ITSCube.NUM_GRANULES_TO_WRITE:
-    #                 self.combine_layers(output_dir, is_first_write)
-    #                 is_first_write = False
-    #
-    #     # Check if there are remaining layers to be written to the file
-    #     if len(self.urls):
-    #         self.combine_layers(output_dir, is_first_write)
-    #
-    #     self.format_stats()
-    #
-    #     return found_urls
-    #
-    # def create_from_local_parallel(self, api_params: dict, output_dir: str, num_granules=None, dirpath='data'):
-    #     """
-    #     Create velocity cube from local data in parallel.
-    #
-    #     api_params: dict
-    #         Search API required parameters.
-    #     num_granules: int
-    #         Number of first granules to examine.
-    #         TODO: This is a temporary solution to a very long time to open remote granules.
-    #               Should not be used when running the code in production mode.
-    #     dirpath: str
-    #         Directory that stores granules files. Default is 'data' sub-directory
-    #         accessible from the directory the code is running from.
-    #     """
-    #     self.clear()
-    #     found_urls = self.request_granules(api_params, num_granules)
-    #     tasks = [dask.delayed(self.read_dataset)(os.path.join(dirpath, os.path.basename(each_file))) for each_file in found_urls]
-    #
-    #     results = None
-    #     with ProgressBar():
-    #         # Display progress bar
-    #         results = dask.compute(tasks, scheduler=ITSCube.DASK_SCHEDULER, num_workers=ITSCube.NUM_THREADS)
-    #
-    #     for each_ds in results[0]:
-    #         self.add_layer(*each_ds)
-    #
-    #     self.combine_layers()
-    #     self.format_stats()
-    #
-    #     return found_urls
+        else:
+            raise RuntimeError(f"Datacube data does not exist.")
 
     def create_from_local_no_api(self, output_dir: str, dirpath='data'):
         """
@@ -578,6 +488,25 @@ class ITSCube:
 
         return found_urls
 
+    def get_data_var(self, ds: xr.Dataset, var_name: str):
+        """
+        Return xr.DataArray that corresponds to the data variable if it exists
+        in the 'ds' dataset, or empty xr.DataArray if it is not present in the 'ds'.
+        Empty xr.DataArray assumes the same dimensions as ds.v data array.
+        """
+
+        if var_name in ds:
+            return ds[var_name]
+
+        # Create empty array as it is not provided in the granule,
+        # use the same coordinates as for any cube's data variables.
+        # ATTN: This assumes that self.layers already contains 'v' data variable.
+        return xr.DataArray(
+            data=None,
+            coords=[self.layers.v.coords[Coords.Y], self.layers.v.coords[Coords.X]],
+            dims=[Coords.Y, Coords.X]
+        )
+
     def preprocess_dataset(self, ds: xr.Dataset, ds_url: str):
         """
         Pre-process ITS_LIVE dataset in preparation for the cube layer.
@@ -602,17 +531,11 @@ class ITSCube:
         # when accessing S3 bucket (?)
         # ds.load()
 
-        # Flag if layer data is empty.
+        # Flag if layer data is empty
         empty = False
 
-        # Layer velocity data
-        cube_v = None
-        cube_vx = None
-        cube_vy = None
-        cube_chip_size_height = None
-        cube_chip_size_width = None
-        cube_interp_mask = None
-        cube_v_error = None
+        # Layer data
+        mask_data = None
 
         # Layer middle date
         mid_date = None
@@ -633,54 +556,21 @@ class ITSCube:
             # Another way to filter:
             # cube_v = ds.v.sel(x=slice(self.x.min, self.x.max),y=slice(self.y.max, self.y.min)).copy()
 
-            # Get data variables for the polygon
-            cube_v = mask_data.v
-            cube_vx = mask_data.vx
-            cube_vy = mask_data.vy
-            cube_chip_size_height = mask_data.chip_size_height
-            cube_chip_size_width = mask_data.chip_size_width
-            cube_interp_mask = mask_data.interp_mask
-            if DataVars.V_ERROR in mask_data:
-                cube_v_error = mask_data.v_error
-
             # If it's a valid velocity layer, add it to the cube.
-            if np.any(cube_v.notnull()):
+            if np.any(mask_data.v.notnull()):
                 # Uncomment if to use random access read of filtered data only
-                cube_v.load()
-                cube_vx.load()
-                cube_vy.load()
-                cube_chip_size_height.load()
-                cube_chip_size_width.load()
-                cube_interp_mask.load()
-                if cube_v_error is not None:
-                    cube_v_error.load()
-
-                else:
-                    # Create empty array as it is not provided in the granule,
-                    # use the same coordinates as for any cube's data variables.
-                    cube_v_error = xr.DataArray(
-                        data=None,
-                        coords=[cube_v.coords[Coords.Y], cube_v.coords[Coords.X]],
-                        dims=[Coords.Y, Coords.X])
+                mask_data.load()
 
             else:
                 # Reset cube back to None as it does not contain any valid data
-                cube_v = None
-                cube_vx = None
-                cube_vy = None
-                cube_chip_size_height = None
-                cube_chip_size_width = None
-                cube_interp_mask = None
-                cube_v_error = None
-
+                mask_data = None
                 mid_date = None
                 empty = True
 
         # Have to return URL for the dataset, which is provided as an input to the method,
         # to track URL per granule in parallel processing
         return empty, int(ds.UTM_Projection.spatial_epsg), mid_date, ds_url, \
-            (cube_v, cube_vx, cube_vy, cube_chip_size_height, cube_chip_size_width, \
-             cube_interp_mask, cube_v_error)
+            mask_data
 
     def combine_layers(self, output_dir, is_first_write=False):
         """
@@ -694,7 +584,7 @@ class ITSCube:
         start_time = timeit.default_timer()
         mid_date_coord = pd.Index(self.dates, name=Coords.MID_DATE)
 
-        v_layers = xr.concat(self.v, mid_date_coord)
+        v_layers = xr.concat([each_ds.v for each_ds in self.ds], mid_date_coord)
 
         # TODO: Should keep attributes per each layer's array or create
         #       attributes at the top level?
@@ -716,35 +606,64 @@ class ITSCube:
 
         # Assign one data variable at a time to avoid running out of memory
         self.layers[DataVars.V] = v_layers
+
+        # Collect 'v' attributes
+        self.layers[DataVars.GRID_MAPPING] = xr.DataArray(
+            data=[ds.v.attrs[DataVars.GRID_MAPPING] for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+
+        self.layers[DataVars.MAP_SCALE_CORRECTED] = xr.DataArray(
+            data=[ds.v.attrs[DataVars.MAP_SCALE_CORRECTED][0] if DataVars.MAP_SCALE_CORRECTED in ds.v.attrs else DataVars.MISSING_BYTE for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+
+        # If attributes propagated as cube's v attribute, delete it
+        if DataVars.GRID_MAPPING in self.layers[DataVars.V].attrs:
+            del self.layers[DataVars.V].attrs[DataVars.GRID_MAPPING]
+
+        if DataVars.MAP_SCALE_CORRECTED in self.layers[DataVars.V].attrs:
+            del self.layers[DataVars.V].attrs[DataVars.MAP_SCALE_CORRECTED]
+
+        # Drop data variable as we don't need it anymore - free up memory
+        self.ds = [each.drop_vars(DataVars.V) for each in self.ds]
         del v_layers
-        self.v = None
         gc.collect()
 
         # vx_layers = xr.concat(self.vx, mid_date_coord)
-        self.layers[DataVars.VX] = xr.concat(self.vx, mid_date_coord)
-        self.vx = None
+        self.layers[DataVars.VX] = xr.concat([ds.vx for ds in self.ds], mid_date_coord)
+        # Drop data variable as we don't need it anymore - free up memory
+        self.ds = [ds.drop_vars(DataVars.VX) for ds in self.ds]
         gc.collect()
 
         # vy_layers = xr.concat(self.vy, mid_date_coord)
-        self.layers[DataVars.VY] = xr.concat(self.vy, mid_date_coord)
-        self.vy = None
+        self.layers[DataVars.VY] = xr.concat([ds.vy for ds in self.ds], mid_date_coord)
+        # Drop data variable as we don't need it anymore - free up memory
+        self.ds = [ds.drop_vars(DataVars.VY) for ds in self.ds]
         gc.collect()
 
-        self.layers[DataVars.CHIP_SIZE_HEIGHT] = xr.concat(self.chip_size_height, mid_date_coord)
-        self.chip_size_height = None
+        self.layers[DataVars.CHIP_SIZE_HEIGHT] = xr.concat([ds.chip_size_height for ds in self.ds], mid_date_coord)
+        # Drop data variable as we don't need it anymore - free up memory
+        self.ds = [ds.drop_vars(DataVars.CHIP_SIZE_HEIGHT) for ds in self.ds]
         gc.collect()
 
-        self.layers[DataVars.CHIP_SIZE_WIDTH] = xr.concat(self.chip_size_width, mid_date_coord)
-        self.chip_size_width = None
+        self.layers[DataVars.CHIP_SIZE_WIDTH] = xr.concat([ds.chip_size_width for ds in self.ds], mid_date_coord)
+        # Drop data variable as we don't need it anymore - free up memory
+        self.ds = [ds.drop_vars(DataVars.CHIP_SIZE_WIDTH) for ds in self.ds]
         gc.collect()
 
-        self.layers[DataVars.INTERP_MASK] = xr.concat(self.interp_mask, mid_date_coord)
-        self.interp_mask = None
+        self.layers[DataVars.INTERP_MASK] = xr.concat([ds.interp_mask for ds in self.ds], mid_date_coord)
+        # Drop data variable as we don't need it anymore - free up memory
+        self.ds = [ds.drop_vars(DataVars.INTERP_MASK) for ds in self.ds]
         gc.collect()
 
-        self.layers[DataVars.V_ERROR] = xr.concat(self.v_error, mid_date_coord)
-        self.v_error = None
-        gc.collect()
+        self.layers[DataVars.V_ERROR] = xr.concat([self.get_data_var(ds, DataVars.V_ERROR) for ds in self.ds] , mid_date_coord)
+        # Drop data variable as we don't need it anymore - free up memory
+        # TODO: Drop only from datasets that have it
+        # self.ds = [ds.drop_vars(DataVars.V_ERROR) for ds in self.ds]
+        # gc.collect()
 
         time_delta = timeit.default_timer() - start_time
         print(f"Combined {len(self.urls)} layers (took {time_delta} seconds)")
