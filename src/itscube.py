@@ -848,7 +848,7 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--numberGranules', type=int, required=False, default=None,
                         help="number of ITS_LIVE granules to consider for the cube (due to runtime limitations). "
                              " If none is provided, process all found granules.")
-    parser.add_argument('-l', '--localPath', type=str, default='data',
+    parser.add_argument('-l', '--localPath', type=str, default=None,
                         help='Local path that stores ITS_LIVE granules.')
     parser.add_argument('-o', '--outputDir', type=str, default="cubedata.zarr",
                         help="Zarr output directory to write cube data to. Default is 'cubedata.zarr'.")
@@ -895,7 +895,7 @@ if __name__ == '__main__':
         print("Processing granules sequentially...")
         if args.localPath:
             # Granules are downloaded locally
-            cube.create_from_local_no_api(args.outputDir, args.numberGranules, args.localPath)
+            cube.create_from_local_no_api(args.outputDir, args.localPath)
 
         else:
             cube.create(API_params, args.outputDir, args.numberGranules)
@@ -905,7 +905,7 @@ if __name__ == '__main__':
         print("Processing granules in parallel...")
         if args.localPath:
             # Granules are downloaded locally
-            cube.create_from_local_parallel_no_api(args.outputDir, args.numberGranules, args.localPath)
+            cube.create_from_local_parallel_no_api(args.outputDir, args.localPath)
 
         else:
             cube.create_parallel(API_params, args.outputDir, args.numberGranules)
