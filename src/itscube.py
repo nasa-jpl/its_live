@@ -36,6 +36,7 @@ class DataVars:
     """
     # Attributes that appear for multiple data variables
     MISSING_VALUE_ATTR = 'missing_value'
+    FILL_VALUE_ATTR    = '_FillValue'
     DESCRIPTION  = 'description'  # v, vx, vy
     GRID_MAPPING = 'grid_mapping' # v, vx, vy - store only one
     STABLE_COUNT = 'stable_count' # vx, vy    - store only one
@@ -62,8 +63,12 @@ class DataVars:
     # Added for the datacube
     URL = 'url'
 
-    MISSING_BYTE = 0
-    MISSING_VALUE = -32767.0
+    # Missing values for data variables
+    MISSING_BYTE      = 0
+    MISSING_VALUE     = -32767
+    MISSING_POS_VALUE = 32767
+
+    V_DESCRIPTION_STR = 'velocity magnitude'
 
     FLAG_STABLE_SHIFT_MEANINGS_STR = \
         "flag for applying velocity bias correction over stable surfaces " \
@@ -530,7 +535,9 @@ class ITSCube:
     def get_data_var_attr(self, ds: xr.Dataset, var_name: str, attr_name: str, missing_value: int = None):
         """
         Return a list of attributes for the data variable in data set if it exists,
-        or DataVars.MISSING_VALUE if it is not present.
+        or missing_value if it is not present.
+        If missing_value is set to None, than attribute is expected to exist for
+        the data variable "var_name".
         """
         if var_name in ds and attr_name in ds[var_name].attrs:
             return ds[var_name].attrs[attr_name][0]
@@ -635,10 +642,20 @@ class ITSCube:
             }
         )
 
-        # Assign one data variable at a time to avoid running out of memory
+        # ATTN: Assign one data variable at a time to avoid running out of memory.
+        #       Delete each variable after it has been processed to free up the
+        #       memory
+
+        # Process 'v'
         self.layers[DataVars.V] = v_layers
-        if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.V].attrs:
-            self.layers[DataVars.V].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
+        self.layers[DataVars.V].attrs[DataVars.DESCRIPTION] = DataVars.V_DESCRIPTION_STR
+
+        if is_first_write:
+            # Set missing_value only on first write to the disk store, otherwise
+            # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
+            if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.V].attrs:
+                # self.layers[DataVars.V] = self.layers[DataVars.V].fillna(DataVars.MISSING_VALUE)
+                self.layers[DataVars.V].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
 
         # Collect 'v' attributes: these repeat for v, vx, vy, keep only one copy
         # per datacube
@@ -647,17 +664,21 @@ class ITSCube:
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE]
         )
+        # If attribute is propagated as cube's v attribute, delete it
+        if DataVars.GRID_MAPPING in self.layers[DataVars.V].attrs:
+            del self.layers[DataVars.V].attrs[DataVars.GRID_MAPPING]
 
         self.layers[DataVars.MAP_SCALE_CORRECTED] = xr.DataArray(
             data=[ds.v.attrs[DataVars.MAP_SCALE_CORRECTED][0] if DataVars.MAP_SCALE_CORRECTED in ds.v.attrs else DataVars.MISSING_BYTE for ds in self.ds],
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE]
         )
+        if is_first_write:
+            # Set missing_value only on first write to the disk store, otherwise
+            # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
+            self.layers[DataVars.MAP_SCALE_CORRECTED].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
 
-        # If attributes are propagated as cube's v attribute, delete them
-        if DataVars.GRID_MAPPING in self.layers[DataVars.V].attrs:
-            del self.layers[DataVars.V].attrs[DataVars.GRID_MAPPING]
-
+        # If attribute is propagated as cube's v attribute, delete it
         if DataVars.MAP_SCALE_CORRECTED in self.layers[DataVars.V].attrs:
             del self.layers[DataVars.V].attrs[DataVars.MAP_SCALE_CORRECTED]
 
@@ -666,30 +687,35 @@ class ITSCube:
         del v_layers
         gc.collect()
 
+        # Process 'vx'
         self.layers[DataVars.VX] = xr.concat([ds.vx for ds in self.ds], mid_date_coord)
 
-        if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.VX].attrs:
-            self.layers[DataVars.VX].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
+        if is_first_write:
+            # Set missing_value only on first write to the disk store, otherwise
+            # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
+            if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.VX].attrs:
+                self.layers[DataVars.VX].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
 
         # Collect 'vx' attributes
         # TODO: discuss in person
-        missing_error_value = 0.0
         self.layers[DataVars.VX_ERROR] = xr.DataArray(
-            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.VX_ERROR, missing_error_value) for ds in self.ds],
+            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.VX_ERROR, DataVars.MISSING_VALUE) for ds in self.ds],
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE]
         )
-
-        # TODO: discuss in person
-        self.layers[DataVars.STABLE_RMSE] = xr.DataArray(
-            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.STABLE_RMSE, missing_error_value) for ds in self.ds],
-            coords=[mid_date_coord],
-            dims=[Coords.MID_DATE]
-        )
-
-        # If attributes are propagated as cube's vx attribute, delete them
+        # If attribute is propagated as cube's vx attribute, delete it
         if DataVars.VX_ERROR in self.layers[DataVars.VX].attrs:
             del self.layers[DataVars.VX].attrs[DataVars.VX_ERROR]
+
+        # # TODO: discuss in person
+        self.layers[DataVars.STABLE_RMSE] = xr.DataArray(
+            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.STABLE_RMSE, DataVars.MISSING_VALUE) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+        # If attribute is propagated as cube's vx attribute, delete it
+        if DataVars.STABLE_RMSE in self.layers[DataVars.VX].attrs:
+            del self.layers[DataVars.VX].attrs[DataVars.STABLE_RMSE]
 
         # This attribute appears for vx and vy data variables, capture it only once
         self.layers[DataVars.STABLE_COUNT] = xr.DataArray(
@@ -697,6 +723,9 @@ class ITSCube:
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE]
         )
+        # If attribute is propagated as cube's vx attribute, delete it
+        if DataVars.STABLE_COUNT in self.layers[DataVars.VX].attrs:
+            del self.layers[DataVars.VX].attrs[DataVars.STABLE_COUNT]
 
         # This flag appears for vx and vy data variables, capture it only once.
         # "stable_shift_applied" was incorrectly set in the optical legacy dataset
@@ -708,9 +737,10 @@ class ITSCube:
             dims=[Coords.MID_DATE]
         )
 
+        # Set flag meaning description
         self.layers[DataVars.FLAG_STABLE_SHIFT].attrs[DataVars.FLAG_STABLE_SHIFT_MEANINGS] = DataVars.FLAG_STABLE_SHIFT_MEANINGS_STR
 
-        # Create data variable name 'vx_stable_count' at runtime
+        # Create data variable name 'vx_stable_shift' at runtime
         var_name = '_'.join([DataVars.VX, DataVars.STABLE_SHIFT])
         self.layers[var_name] = xr.DataArray(
             data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.STABLE_SHIFT) for ds in self.ds],
@@ -722,8 +752,17 @@ class ITSCube:
         self.ds = [ds.drop_vars(DataVars.VX) for ds in self.ds]
         gc.collect()
 
-        # CONTINUE
+        # Process 'vy'
         self.layers[DataVars.VY] = xr.concat([ds.vy for ds in self.ds], mid_date_coord)
+        if is_first_write:
+            # Set missing_value only on first write to the disk store, otherwise
+            # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
+            if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.VY].attrs:
+                self.layers[DataVars.VY].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
+
+        # Collect 'vy' attributes
+
+
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.VY) for ds in self.ds]
         gc.collect()
@@ -744,6 +783,11 @@ class ITSCube:
         gc.collect()
 
         self.layers[DataVars.V_ERROR] = xr.concat([self.get_data_var(ds, DataVars.V_ERROR) for ds in self.ds] , mid_date_coord)
+        if is_first_write:
+            # Have to set missing_value only on first write to the disk store
+            if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.V_ERROR].attrs:
+                self.layers[DataVars.V_ERROR].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
+
         # Drop data variable as we don't need it anymore - free up memory
         # TODO: Drop only from datasets that have it
         # self.ds = [ds.drop_vars(DataVars.V_ERROR) for ds in self.ds]
@@ -752,11 +796,23 @@ class ITSCube:
         time_delta = timeit.default_timer() - start_time
         print(f"Combined {len(self.urls)} layers (took {time_delta} seconds)")
 
+        # Add encoding per data array to force _FillValue to correspond to missing_value
+        # encoding={'<array-name>': {'_FillValue': 65535}}
+        # DataVars.GRID_MAPPING is always expected to have a value, no need for _FillValue
+        # DataVars.VX_ERROR, DataVars.STABLE_RMSE, DataVars.STABLE_COUNT - ?
+        # DataVars.FLAG_STABLE_SHIFT - 0 as missing_value?
+        # vx_stable_shift - ?
+        encoding_settings = {DataVars.V: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+                             DataVars.MAP_SCALE_CORRECTED: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
+                             DataVars.VX: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+                             DataVars.VX_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+                             DataVars.VY: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+                             DataVars.V_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}}
         start_time = timeit.default_timer()
         # Write to the Zarr store
         if is_first_write:
             # This is first write, create Zarr store
-            self.layers.to_zarr(output_dir)
+            self.layers.to_zarr(output_dir, encoding = encoding_settings)
 
         else:
             # Append layers to existing Zarr store
