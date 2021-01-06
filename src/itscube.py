@@ -1,22 +1,24 @@
 import copy
-import dask
-from dask.distributed import Client, performance_report
-from dask.diagnostics import ProgressBar
 from datetime import datetime, timedelta
 import gc
 import glob
 import os
-import numpy  as np
-import matplotlib.pyplot as plt
-import pandas as pd
-import s3fs
 import shutil
 import timeit
+
+# Extra installed packages
+import dask
+# from dask.distributed import Client, performance_report
+from dask.diagnostics import ProgressBar
+import numpy  as np
+import pandas as pd
+import s3fs
 from tqdm import tqdm
 import xarray as xr
 
+# Local modules
 from itslive import itslive_ui
-from grid import Bounds, Grid
+from grid import Bounds
 
 
 class Coords:
@@ -32,13 +34,25 @@ class DataVars:
     """
     Data variables for the data cube.
     """
+    # Attributes that appear for multiple data variables
+    MISSING_VALUE_ATTR = 'missing_value'
+    DESCRIPTION  = 'description'  # v, vx, vy
+    GRID_MAPPING = 'grid_mapping' # v, vx, vy - store only one
+    STABLE_COUNT = 'stable_count' # vx, vy    - store only one
+    STABLE_SHIFT = 'stable_shift' # vx, vy
+    FLAG_STABLE_SHIFT_MEANINGS = 'flag_stable_shift_meanings' # vx, vy
+
     # Original data variables and their attributes per ITS_LIVE granules.
-    V                   = 'v'
+    V = 'v'
     # V attributes
-    GRID_MAPPING        = 'grid_mapping'
     MAP_SCALE_CORRECTED = 'map_scale_corrected'
 
-    VX               = 'vx'
+    VX = 'vx'
+    # VX attributes
+    VX_ERROR          = 'vx_error'          # In Radar and updated Optical formats
+    FLAG_STABLE_SHIFT = 'flag_stable_shift' # In Radar and updated Optical formats
+    STABLE_RMSE       = 'stable_rmse'       # In Optical legacy format only
+
     VY               = 'vy'
     CHIP_SIZE_HEIGHT = 'chip_size_height'
     CHIP_SIZE_WIDTH  = 'chip_size_width'
@@ -50,6 +64,12 @@ class DataVars:
 
     MISSING_BYTE = 0
     MISSING_VALUE = -32767.0
+
+    FLAG_STABLE_SHIFT_MEANINGS_STR = \
+        "flag for applying velocity bias correction over stable surfaces " \
+        "(stationary or slow-flowing surfaces with velocity < 15 m/yr): " \
+        "0 = there is no stable surface available and no correction is applied; " \
+        "1 = there are stable surfaces and velocity bias is corrected;"
 
 
 class ITSCube:
@@ -507,6 +527,20 @@ class ITSCube:
             dims=[Coords.Y, Coords.X]
         )
 
+    def get_data_var_attr(self, ds: xr.Dataset, var_name: str, attr_name: str, missing_value: int = None):
+        """
+        Return a list of attributes for the data variable in data set if it exists,
+        or DataVars.MISSING_VALUE if it is not present.
+        """
+        if var_name in ds and attr_name in ds[var_name].attrs:
+            return ds[var_name].attrs[attr_name][0]
+
+        if missing_value is None:
+            # If missing_value is not provided, attribute is expected to exist always
+            raise RuntimeError(f"{attr_name} is expected within {var_name} for {ds}")
+
+        return missing_value
+
     def preprocess_dataset(self, ds: xr.Dataset, ds_url: str):
         """
         Pre-process ITS_LIVE dataset in preparation for the cube layer.
@@ -558,7 +592,6 @@ class ITSCube:
 
             # If it's a valid velocity layer, add it to the cube.
             if np.any(mask_data.v.notnull()):
-                # Uncomment if to use random access read of filtered data only
                 mask_data.load()
 
             else:
@@ -586,8 +619,6 @@ class ITSCube:
 
         v_layers = xr.concat([each_ds.v for each_ds in self.ds], mid_date_coord)
 
-        # TODO: Should keep attributes per each layer's array or create
-        #       attributes at the top level?
         self.layers = xr.Dataset(
             data_vars = {DataVars.URL: ([Coords.MID_DATE], self.urls)},
             coords = {
@@ -606,8 +637,11 @@ class ITSCube:
 
         # Assign one data variable at a time to avoid running out of memory
         self.layers[DataVars.V] = v_layers
+        if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.V].attrs:
+            self.layers[DataVars.V].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
 
-        # Collect 'v' attributes
+        # Collect 'v' attributes: these repeat for v, vx, vy, keep only one copy
+        # per datacube
         self.layers[DataVars.GRID_MAPPING] = xr.DataArray(
             data=[ds.v.attrs[DataVars.GRID_MAPPING] for ds in self.ds],
             coords=[mid_date_coord],
@@ -620,7 +654,7 @@ class ITSCube:
             dims=[Coords.MID_DATE]
         )
 
-        # If attributes propagated as cube's v attribute, delete it
+        # If attributes are propagated as cube's v attribute, delete them
         if DataVars.GRID_MAPPING in self.layers[DataVars.V].attrs:
             del self.layers[DataVars.V].attrs[DataVars.GRID_MAPPING]
 
@@ -632,13 +666,63 @@ class ITSCube:
         del v_layers
         gc.collect()
 
-        # vx_layers = xr.concat(self.vx, mid_date_coord)
         self.layers[DataVars.VX] = xr.concat([ds.vx for ds in self.ds], mid_date_coord)
+
+        if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.VX].attrs:
+            self.layers[DataVars.VX].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
+
+        # Collect 'vx' attributes
+        # TODO: discuss in person
+        missing_error_value = 0.0
+        self.layers[DataVars.VX_ERROR] = xr.DataArray(
+            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.VX_ERROR, missing_error_value) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+
+        # TODO: discuss in person
+        self.layers[DataVars.STABLE_RMSE] = xr.DataArray(
+            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.STABLE_RMSE, missing_error_value) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+
+        # If attributes are propagated as cube's vx attribute, delete them
+        if DataVars.VX_ERROR in self.layers[DataVars.VX].attrs:
+            del self.layers[DataVars.VX].attrs[DataVars.VX_ERROR]
+
+        # This attribute appears for vx and vy data variables, capture it only once
+        self.layers[DataVars.STABLE_COUNT] = xr.DataArray(
+            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.STABLE_COUNT) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+
+        # This flag appears for vx and vy data variables, capture it only once.
+        # "stable_shift_applied" was incorrectly set in the optical legacy dataset
+        # and should be set to the no data value
+        missing_stable_shift_value = 0.0
+        self.layers[DataVars.FLAG_STABLE_SHIFT] = xr.DataArray(
+            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.FLAG_STABLE_SHIFT, missing_stable_shift_value) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+
+        self.layers[DataVars.FLAG_STABLE_SHIFT].attrs[DataVars.FLAG_STABLE_SHIFT_MEANINGS] = DataVars.FLAG_STABLE_SHIFT_MEANINGS_STR
+
+        # Create data variable name 'vx_stable_count' at runtime
+        var_name = '_'.join([DataVars.VX, DataVars.STABLE_SHIFT])
+        self.layers[var_name] = xr.DataArray(
+            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.STABLE_SHIFT) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.VX) for ds in self.ds]
         gc.collect()
 
-        # vy_layers = xr.concat(self.vy, mid_date_coord)
+        # CONTINUE
         self.layers[DataVars.VY] = xr.concat([ds.vy for ds in self.ds], mid_date_coord)
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.VY) for ds in self.ds]
@@ -764,8 +848,8 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--numberGranules', type=int, required=False, default=None,
                         help="number of ITS_LIVE granules to consider for the cube (due to runtime limitations). "
                              " If none is provided, process all found granules.")
-    parser.add_argument('-l', '--localPath', type=str, default=None,
-                        help='Local path that stores ITS_LIVE granules')
+    parser.add_argument('-l', '--localPath', type=str, default='data',
+                        help='Local path that stores ITS_LIVE granules.')
     parser.add_argument('-o', '--outputDir', type=str, default="cubedata.zarr",
                         help="Zarr output directory to write cube data to. Default is 'cubedata.zarr'.")
     parser.add_argument('-c', '--chunks', type=int, default=1000,
@@ -800,8 +884,8 @@ if __name__ == '__main__':
 
     # Parameters for the search granule API
     API_params = {
-        'start'               : '2010-01-05',
-        'end'                 : '2020-01-01',
+        'start'               : '1984-01-01',
+        'end'                 : '2021-01-01',
         'percent_valid_pixels': 1
     }
 
@@ -811,7 +895,7 @@ if __name__ == '__main__':
         print("Processing granules sequentially...")
         if args.localPath:
             # Granules are downloaded locally
-            cube.create_from_local(API_params, args.outputDir, args.numberGranules, args.localPath)
+            cube.create_from_local_no_api(args.outputDir, args.numberGranules, args.localPath)
 
         else:
             cube.create(API_params, args.outputDir, args.numberGranules)
@@ -821,7 +905,7 @@ if __name__ == '__main__':
         print("Processing granules in parallel...")
         if args.localPath:
             # Granules are downloaded locally
-            cube.create_from_local_parallel(API_params, args.outputDir, args.numberGranules, args.localPath)
+            cube.create_from_local_parallel_no_api(args.outputDir, args.numberGranules, args.localPath)
 
         else:
             cube.create_parallel(API_params, args.outputDir, args.numberGranules)
