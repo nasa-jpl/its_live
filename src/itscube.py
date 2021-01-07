@@ -42,20 +42,27 @@ class DataVars:
     STABLE_COUNT = 'stable_count' # vx, vy    - store only one
     STABLE_SHIFT = 'stable_shift' # vx, vy
     FLAG_STABLE_SHIFT_MEANINGS = 'flag_stable_shift_meanings' # vx, vy
+    STABLE_APPLY_DATE = 'stable_apply_date' # vx, vy - remove from attributes
 
     # Original data variables and their attributes per ITS_LIVE granules.
     V = 'v'
-    # V attributes
+    # Attributes
     MAP_SCALE_CORRECTED = 'map_scale_corrected'
 
     VX = 'vx'
-    # VX attributes
+    # Attributes
     VX_ERROR          = 'vx_error'          # In Radar and updated Optical formats
     FLAG_STABLE_SHIFT = 'flag_stable_shift' # In Radar and updated Optical formats
     STABLE_RMSE       = 'stable_rmse'       # In Optical legacy format only
 
     VY               = 'vy'
+    # Attributes
+    VY_ERROR          = 'vy_error'          # In Radar and updated Optical formats
+
     CHIP_SIZE_HEIGHT = 'chip_size_height'
+    # Attributes
+    CHIP_SIZE_COORDINATES = 'chip_size_coordinates'
+
     CHIP_SIZE_WIDTH  = 'chip_size_width'
     INTERP_MASK      = 'interp_mask'
     V_ERROR          = 'v_error'
@@ -64,12 +71,17 @@ class DataVars:
     URL = 'url'
 
     # Missing values for data variables
-    MISSING_BYTE      = 0
-    MISSING_VALUE     = -32767
-    MISSING_POS_VALUE = 32767
+    MISSING_BYTE      = 0.0
+    MISSING_VALUE     = -32767.0
+    MISSING_POS_VALUE = 32767.0
 
     V_DESCRIPTION_STR = 'velocity magnitude'
-
+    VX_DESCRIPTION_STR = "velocity component in x direction"
+    VY_DESCRIPTION_STR = "velocity component in y direction"
+    CHIP_SIZE_COORDINATES_STR = "Optical data: chip_size_coordinates = " \
+        "'image projection geometry: width = x, height = y'. Radar data: " \
+        "chip_size_coordinates = 'radar geometry: width = range, height = azimuth'"
+    CHIP_SIZE_HEIGHT_STR = "height of search window"
     FLAG_STABLE_SHIFT_MEANINGS_STR = \
         "flag for applying velocity bias correction over stable surfaces " \
         "(stationary or slow-flowing surfaces with velocity < 15 m/yr): " \
@@ -644,7 +656,7 @@ class ITSCube:
 
         # ATTN: Assign one data variable at a time to avoid running out of memory.
         #       Delete each variable after it has been processed to free up the
-        #       memory
+        #       memory.
 
         # Process 'v'
         self.layers[DataVars.V] = v_layers
@@ -669,7 +681,7 @@ class ITSCube:
             del self.layers[DataVars.V].attrs[DataVars.GRID_MAPPING]
 
         self.layers[DataVars.MAP_SCALE_CORRECTED] = xr.DataArray(
-            data=[ds.v.attrs[DataVars.MAP_SCALE_CORRECTED][0] if DataVars.MAP_SCALE_CORRECTED in ds.v.attrs else DataVars.MISSING_BYTE for ds in self.ds],
+            data=[self.get_data_var_attr(ds, DataVars.V, DataVars.MAP_SCALE_CORRECTED, DataVars.MISSING_BYTE) for ds in self.ds],
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE]
         )
@@ -689,6 +701,7 @@ class ITSCube:
 
         # Process 'vx'
         self.layers[DataVars.VX] = xr.concat([ds.vx for ds in self.ds], mid_date_coord)
+        self.layers[DataVars.VX].attrs[DataVars.DESCRIPTION] = DataVars.VX_DESCRIPTION_STR
 
         if is_first_write:
             # Set missing_value only on first write to the disk store, otherwise
@@ -697,6 +710,10 @@ class ITSCube:
                 self.layers[DataVars.VX].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
 
         # Collect 'vx' attributes
+        if DataVars.STABLE_APPLY_DATE in self.layers[DataVars.VX].attrs:
+            # Remove optical legacy attribute if it propagated to the cube data
+            del self.layers[DataVars.VX].attrs[DataVars.STABLE_APPLY_DATE]
+
         # TODO: discuss in person
         self.layers[DataVars.VX_ERROR] = xr.DataArray(
             data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.VX_ERROR, DataVars.MISSING_VALUE) for ds in self.ds],
@@ -707,7 +724,7 @@ class ITSCube:
         if DataVars.VX_ERROR in self.layers[DataVars.VX].attrs:
             del self.layers[DataVars.VX].attrs[DataVars.VX_ERROR]
 
-        # # TODO: discuss in person
+        # TODO: discuss in person
         self.layers[DataVars.STABLE_RMSE] = xr.DataArray(
             data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.STABLE_RMSE, DataVars.MISSING_VALUE) for ds in self.ds],
             coords=[mid_date_coord],
@@ -747,6 +764,9 @@ class ITSCube:
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE]
         )
+        # If attribute is propagated as cube's vx attribute, delete it
+        if DataVars.STABLE_SHIFT in self.layers[DataVars.VX].attrs:
+            del self.layers[DataVars.VX].attrs[DataVars.STABLE_SHIFT]
 
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.VX) for ds in self.ds]
@@ -754,6 +774,8 @@ class ITSCube:
 
         # Process 'vy'
         self.layers[DataVars.VY] = xr.concat([ds.vy for ds in self.ds], mid_date_coord)
+        self.layers[DataVars.VY].attrs[DataVars.DESCRIPTION] = DataVars.VY_DESCRIPTION_STR
+
         if is_first_write:
             # Set missing_value only on first write to the disk store, otherwise
             # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
@@ -761,13 +783,42 @@ class ITSCube:
                 self.layers[DataVars.VY].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
 
         # Collect 'vy' attributes
+        if DataVars.STABLE_APPLY_DATE in self.layers[DataVars.VY].attrs:
+            # Remove optical legacy attribute if it propagated to the cube data
+            del self.layers[DataVars.VY].attrs[DataVars.STABLE_APPLY_DATE]
 
+        # TODO: discuss in person
+        self.layers[DataVars.VY_ERROR] = xr.DataArray(
+            data=[self.get_data_var_attr(ds, DataVars.VY, DataVars.VY_ERROR, DataVars.MISSING_VALUE) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+        # If attribute is propagated as cube's vx attribute, delete it
+        if DataVars.VY_ERROR in self.layers[DataVars.VY].attrs:
+            del self.layers[DataVars.VY].attrs[DataVars.VY_ERROR]
+
+        # Create data variable name 'vy_stable_shift' at runtime
+        var_name = '_'.join([DataVars.VY, DataVars.STABLE_SHIFT])
+        self.layers[var_name] = xr.DataArray(
+            data=[self.get_data_var_attr(ds, DataVars.VY, DataVars.STABLE_SHIFT) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+        # If attribute is propagated as cube's vy attribute, delete it
+        if DataVars.STABLE_SHIFT in self.layers[DataVars.VY].attrs:
+            del self.layers[DataVars.VY].attrs[DataVars.STABLE_SHIFT]
 
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.VY) for ds in self.ds]
         gc.collect()
 
+        # Process chip_size_height
         self.layers[DataVars.CHIP_SIZE_HEIGHT] = xr.concat([ds.chip_size_height for ds in self.ds], mid_date_coord)
+
+        # Collect 'chip_size_height' attributes
+        self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.CHIP_SIZE_COORDINATES] = DataVars.CHIP_SIZE_COORDINATES_STR
+        self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.DESCRIPTION] = DataVars.CHIP_SIZE_HEIGHT_STR
+
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.CHIP_SIZE_HEIGHT) for ds in self.ds]
         gc.collect()
@@ -796,21 +847,25 @@ class ITSCube:
         time_delta = timeit.default_timer() - start_time
         print(f"Combined {len(self.urls)} layers (took {time_delta} seconds)")
 
-        # Add encoding per data array to force _FillValue to correspond to missing_value
-        # encoding={'<array-name>': {'_FillValue': 65535}}
-        # DataVars.GRID_MAPPING is always expected to have a value, no need for _FillValue
-        # DataVars.VX_ERROR, DataVars.STABLE_RMSE, DataVars.STABLE_COUNT - ?
-        # DataVars.FLAG_STABLE_SHIFT - 0 as missing_value?
-        # vx_stable_shift - ?
-        encoding_settings = {DataVars.V: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
-                             DataVars.MAP_SCALE_CORRECTED: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
-                             DataVars.VX: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
-                             DataVars.VX_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
-                             DataVars.VY: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
-                             DataVars.V_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}}
         start_time = timeit.default_timer()
         # Write to the Zarr store
         if is_first_write:
+            # ATTN: Must set _FillValue attribute for each data variable that has
+            #       its missing_value attribute set
+            # Add encoding per data array to force _FillValue to correspond to missing_value
+            # encoding={'<array-name>': {'_FillValue': 65535}}
+            # DataVars.GRID_MAPPING is always expected to have a value, no need for _FillValue
+            # DataVars.VX_ERROR, DataVars.STABLE_RMSE, DataVars.STABLE_COUNT - ?
+            # DataVars.FLAG_STABLE_SHIFT - 0 as missing_value?
+            # vx_stable_shift - ?
+            encoding_settings = {DataVars.V: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+                                 DataVars.MAP_SCALE_CORRECTED: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
+                                 DataVars.VX: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+                                 DataVars.VX_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+                                 DataVars.VY: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+                                 DataVars.VY_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+                                 DataVars.V_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}}
+
             # This is first write, create Zarr store
             self.layers.to_zarr(output_dir, encoding = encoding_settings)
 
