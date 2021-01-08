@@ -783,6 +783,7 @@ class ITSCube:
 
         v_layers = xr.concat([each_ds.v for each_ds in self.ds], mid_date_coord)
 
+        now_date = datetime.now().strftime('%d-%m-%Y %H:%M:%S')
         self.layers = xr.Dataset(
             data_vars = {DataVars.URL: ([Coords.MID_DATE], self.urls)},
             coords = {
@@ -791,9 +792,11 @@ class ITSCube:
                 Coords.Y: v_layers.coords[Coords.Y]
             },
             attrs = {
-                'title': 'ITS_LIVE datacube of velocity pairs',
-                'author': 'Alex S. Gardner, JPL/NASA',
+                'title': 'ITS_LIVE datacube of image_pair velocities',
+                'author': 'ITS_LIVE, a NASA MeASUREs project (its-live.jpl.nasa.gov)',
                 'institution': 'NASA Jet Propulsion Laboratory (JPL), California Institute of Technology',
+                'date_created': now_date,
+                'date_updated': now_date,
                 'GDAL_AREA_OR_POINT': 'Area',
                 'projection': str(self.projection)
             }
