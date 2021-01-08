@@ -115,8 +115,8 @@ class DataVars:
         "errors are larger than those determined from range and azimuth " \
         "measurements, unprojected vy estimates are used"
 
-    V_ERROR_DESCRIPTION_STR = 'velocity magnitude error'
-    INTERP_MASK_DESCRIPTION_STR = "light interpolation mask"
+    V_ERROR_DESCRIPTION = 'velocity magnitude error'
+    INTERP_MASK_DESCRIPTION = "light interpolation mask"
     CHIP_SIZE_COORDS_STR = "Optical data: chip_size_coordinates = " \
         "'image projection geometry: width = x, height = y'. Radar data: " \
         "chip_size_coordinates = 'radar geometry: width = range, height = azimuth'"
@@ -670,6 +670,17 @@ class ITSCube:
         """
         _stable_rmse_vars = [DataVars.VX, DataVars.VY]
 
+        # Dictionary of attributes values for new v*_error data variables:
+        # std_name, description
+        _attrs = {
+            'vx_error': ("x_velocity_error", "error for velocity component in x direction"),
+            'vy_error': ("y_velocity_error", "error for velocity component in y direction"),
+            'va_error': ("azimuth_velocity_error", "error for velocity in radar azimuth direction"),
+            'vr_error': ("range_velocity_error", "error for velocity in radar range direction"),
+            'vxp_error': ("projected_x_velocity_error", "error for x-direction velocity determined by projecting radar range measurements onto an a priori flow vector"),
+            'vyp_error': ("projected_y_velocity_error", "error for y-direction velocity determined by projecting radar range measurements onto an a priori flow vector")
+        }
+
         # Process attributes
         if DataVars.STABLE_APPLY_DATE in self.layers[var_name].attrs:
             # Remove optical legacy attribute if it propagated to the cube data
@@ -707,8 +718,14 @@ class ITSCube:
         self.layers[error_name] = xr.DataArray(
             data=error_data,
             coords=[mid_date_coord],
-            dims=[Coords.MID_DATE]
+            dims=[Coords.MID_DATE],
+            attrs={
+                DataVars.UNITS: DataVars.M_Y_UNITS,
+                DataVars.STD_NAME: _attrs[error_name][0],
+                DataVars.DESCRIPTION: _attrs[error_name][1]
+            }
         )
+
         # If attribute is propagated as cube's data var attribute, delete it
         if error_name in self.layers[var_name].attrs:
             del self.layers[var_name].attrs[error_name]
@@ -919,7 +936,7 @@ class ITSCube:
 
         # Process interp_mask
         self.layers[DataVars.INTERP_MASK] = xr.concat([ds.interp_mask for ds in self.ds], mid_date_coord)
-        self.layers[DataVars.INTERP_MASK].attrs[DataVars.DESCRIPTION] = DataVars.INTERP_MASK_DESCRIPTION_STR
+        self.layers[DataVars.INTERP_MASK].attrs[DataVars.DESCRIPTION] = DataVars.INTERP_MASK_DESCRIPTION
 
         if is_first_write:
             self.layers[DataVars.INTERP_MASK].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
@@ -943,7 +960,7 @@ class ITSCube:
         if DataVars.GRID_MAPPING in self.layers[DataVars.V_ERROR].attrs:
             del self.layers[DataVars.V_ERROR].attrs[DataVars.GRID_MAPPING]
 
-        self.layers[DataVars.V_ERROR].attrs[DataVars.DESCRIPTION] = DataVars.V_ERROR_DESCRIPTION_STR
+        self.layers[DataVars.V_ERROR].attrs[DataVars.DESCRIPTION] = DataVars.V_ERROR_DESCRIPTION
         self.layers[DataVars.V_ERROR].attrs[DataVars.STD_NAME] = 'velocity_error'
         self.layers[DataVars.V_ERROR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
 
@@ -951,6 +968,45 @@ class ITSCube:
         # Drop only from datasets that have it
         self.ds = [ds.drop_vars(DataVars.V_ERROR) if DataVars.V_ERROR in ds else ds for ds in self.ds]
         gc.collect()
+
+        # Process 'vp'
+        self.layers[DataVars.VP] = xr.concat([self.get_data_var(ds, DataVars.VP) for ds in self.ds] , mid_date_coord)
+        new_v_vars.append(DataVars.VP)
+
+        # Collect 'vp' attributes
+        # If attribute is propagated as cube's data attribute, delete it as
+        # it's a data variable on its own.
+        if DataVars.GRID_MAPPING in self.layers[DataVars.VP].attrs:
+            del self.layers[DataVars.VP].attrs[DataVars.GRID_MAPPING]
+
+        self.layers[DataVars.VP].attrs[DataVars.DESCRIPTION] = DataVars.VP_DESCRIPTION
+        self.layers[DataVars.VP].attrs[DataVars.STD_NAME] = 'projected_velocity'
+        self.layers[DataVars.VP].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
+
+        # Drop data variable as we don't need it anymore - free up memory
+        # Drop only from datasets that have it
+        self.ds = [ds.drop_vars(DataVars.VP) if DataVars.VP in ds else ds for ds in self.ds]
+        gc.collect()
+
+        # Process 'vp_error'
+        self.layers[DataVars.VP_ERROR] = xr.concat([self.get_data_var(ds, DataVars.VP_ERROR) for ds in self.ds] , mid_date_coord)
+        new_v_vars.append(DataVars.VP_ERROR)
+
+        # Collect 'vp' attributes
+        # If attribute is propagated as cube's data attribute, delete it as
+        # it's a data variable on its own.
+        if DataVars.GRID_MAPPING in self.layers[DataVars.VP].attrs:
+            del self.layers[DataVars.VP].attrs[DataVars.GRID_MAPPING]
+
+        self.layers[DataVars.VP_ERROR].attrs[DataVars.DESCRIPTION] = DataVars.VP_ERROR_DESCRIPTION
+        self.layers[DataVars.VP_ERROR].attrs[DataVars.STD_NAME] = 'projected_velocity_error'
+        self.layers[DataVars.VP_ERROR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
+
+        # Drop data variable as we don't need it anymore - free up memory
+        # Drop only from datasets that have it
+        self.ds = [ds.drop_vars(DataVars.VP) if DataVars.VP in ds else ds for ds in self.ds]
+        gc.collect()
+
 
         time_delta = timeit.default_timer() - start_time
         print(f"Combined {len(self.urls)} layers (took {time_delta} seconds)")
@@ -960,15 +1016,6 @@ class ITSCube:
         if is_first_write:
             # ATTN: Must set _FillValue attribute for each data variable that has
             #       its missing_value attribute set
-            # Add encoding per data array to force _FillValue to correspond to missing_value
-            # encoding={'<array-name>': {'_FillValue': 65535}}
-            # DataVars.GRID_MAPPING is always expected to have a value, no need for _FillValue
-            # DataVars.VX_ERROR, DataVars.STABLE_COUNT - ?
-            # DataVars.FLAG_STABLE_SHIFT - 0 as missing_value?
-            # vx_stable_shift - ?
-            # DataVars.VX_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
-            # DataVars.VY_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
-
             encoding_settings = {DataVars.MAP_SCALE_CORRECTED: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
                                  DataVars.INTERP_MASK: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
                                  DataVars.CHIP_SIZE_HEIGHT: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
@@ -977,11 +1024,10 @@ class ITSCube:
             for each in new_v_vars:
                 encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}
 
-                if is_first_write:
-                    # Set missing_value only on first write to the disk store, otherwise
-                    # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
-                    if DataVars.MISSING_VALUE_ATTR not in self.layers[each].attrs:
-                        self.layers[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
+                # Set missing_value only on first write to the disk store, otherwise
+                # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
+                if DataVars.MISSING_VALUE_ATTR not in self.layers[each].attrs:
+                    self.layers[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
 
             # This is first write, create Zarr store
             self.layers.to_zarr(output_dir, encoding = encoding_settings)
@@ -996,8 +1042,7 @@ class ITSCube:
         # Free up memory
         self.clear_vars()
 
-        # TODO: Sort data by date?
-        # self.layers = self.layers.sortby(Coords.MID_DATE)
+        # No need to sort data by date as we will be appending layers to the datacubes
 
     def format_stats(self):
         """
