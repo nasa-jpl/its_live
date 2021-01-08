@@ -668,6 +668,8 @@ class ITSCube:
         """
         Helper method to clean up attributes for v-related data variables.
         """
+        _stable_rmse_vars = [DataVars.VX, DataVars.VY]
+
         # Process attributes
         if DataVars.STABLE_APPLY_DATE in self.layers[var_name].attrs:
             # Remove optical legacy attribute if it propagated to the cube data
@@ -682,27 +684,34 @@ class ITSCube:
         if DataVars.STABLE_SHIFT_APPLIED in self.layers[var_name].attrs:
             del self.layers[var_name].attrs[DataVars.STABLE_SHIFT_APPLIED]
 
-        # TODO: discuss in person
         _name_sep = '_'
         error_name = _name_sep.join([var_name, 'error'])
+
+        # Special care must be taken of v[xy].stable_rmse in
+        # optical legacy format vs. v[xy].v[xy]_error in radar format as these
+        # are the same
+        error_data = None
+        if var_name in _stable_rmse_vars:
+            error_data = [
+                self.get_data_var_attr(ds, var_name, error_name, DataVars.MISSING_VALUE) if error_name in ds[var_name].attrs else
+                self.get_data_var_attr(ds, var_name, DataVars.STABLE_RMSE, DataVars.MISSING_VALUE) for ds in self.ds
+            ]
+
+            # If attribute is propagated as cube's data var attribute, delete it
+            if DataVars.STABLE_RMSE in self.layers[var_name].attrs:
+                del self.layers[var_name].attrs[DataVars.STABLE_RMSE]
+
+        else:
+            error_data = [self.get_data_var_attr(ds, var_name, error_name, DataVars.MISSING_VALUE) for ds in self.ds]
+
         self.layers[error_name] = xr.DataArray(
-            data=[self.get_data_var_attr(ds, var_name, error_name, DataVars.MISSING_VALUE) for ds in self.ds],
+            data=error_data,
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE]
         )
         # If attribute is propagated as cube's data var attribute, delete it
         if error_name in self.layers[var_name].attrs:
             del self.layers[var_name].attrs[error_name]
-
-        # TODO: discuss in person
-        # self.layers[DataVars.STABLE_RMSE] = xr.DataArray(
-        #     data=[self.get_data_var_attr(ds, var_name, DataVars.STABLE_RMSE, DataVars.MISSING_VALUE) for ds in self.ds],
-        #     coords=[mid_date_coord],
-        #     dims=[Coords.MID_DATE]
-        # )
-        # If attribute is propagated as cube's data var attribute, delete it
-        if DataVars.STABLE_RMSE in self.layers[var_name].attrs:
-            del self.layers[var_name].attrs[DataVars.STABLE_RMSE]
 
         # This attribute appears for all v* data variables, capture it only once
         if DataVars.STABLE_COUNT not in self.layers:
@@ -954,7 +963,7 @@ class ITSCube:
             # Add encoding per data array to force _FillValue to correspond to missing_value
             # encoding={'<array-name>': {'_FillValue': 65535}}
             # DataVars.GRID_MAPPING is always expected to have a value, no need for _FillValue
-            # DataVars.VX_ERROR, DataVars.STABLE_RMSE, DataVars.STABLE_COUNT - ?
+            # DataVars.VX_ERROR, DataVars.STABLE_COUNT - ?
             # DataVars.FLAG_STABLE_SHIFT - 0 as missing_value?
             # vx_stable_shift - ?
             # DataVars.VX_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
