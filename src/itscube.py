@@ -42,7 +42,14 @@ class DataVars:
     STABLE_COUNT = 'stable_count' # vx, vy    - store only one
     STABLE_SHIFT = 'stable_shift' # vx, vy
     FLAG_STABLE_SHIFT_MEANINGS = 'flag_stable_shift_meanings' # vx, vy
+
+    # Optical Legacy format only:
+    STABLE_SHIFT_APPLIED = 'stable_shift_applied' # vx, vy - remove from attributes
     STABLE_APPLY_DATE = 'stable_apply_date' # vx, vy - remove from attributes
+
+    STD_NAME = 'standard_name'
+    UNITS = 'units'
+    M_Y_UNITS = 'm/y'
 
     # Original data variables and their attributes per ITS_LIVE granules.
     V = 'v'
@@ -55,18 +62,24 @@ class DataVars:
     FLAG_STABLE_SHIFT = 'flag_stable_shift' # In Radar and updated Optical formats
     STABLE_RMSE       = 'stable_rmse'       # In Optical legacy format only
 
-    VY               = 'vy'
+    VY                = 'vy'
     # Attributes
     VY_ERROR          = 'vy_error'          # In Radar and updated Optical formats
 
-    CHIP_SIZE_HEIGHT = 'chip_size_height'
+    CHIP_SIZE_HEIGHT  = 'chip_size_height'
+    CHIP_SIZE_WIDTH   = 'chip_size_width'
     # Attributes
-    CHIP_SIZE_COORDINATES = 'chip_size_coordinates'
+    CHIP_SIZE_COORDS  = 'chip_size_coordinates'
 
-    CHIP_SIZE_WIDTH  = 'chip_size_width'
     INTERP_MASK      = 'interp_mask'
-    V_ERROR          = 'v_error'
-
+    V_ERROR          = 'v_error' # Optical and Radar only
+    VA               = 'va'
+    VP               = 'vp'
+    VP_ERROR         = 'vp_error'
+    VR               = 'vr'
+    VX               = 'vx'
+    VXP              = 'vxp'
+    VYP              = 'vyp'
     # Added for the datacube
     URL = 'url'
 
@@ -78,10 +91,37 @@ class DataVars:
     V_DESCRIPTION_STR = 'velocity magnitude'
     VX_DESCRIPTION_STR = "velocity component in x direction"
     VY_DESCRIPTION_STR = "velocity component in y direction"
-    CHIP_SIZE_COORDINATES_STR = "Optical data: chip_size_coordinates = " \
+
+    # These descriptions are based on Radar granule format. Have to set them
+    # manually since there are no Radar format granules are available for
+    # processing yet (otherwise these attributes would be automatically picked up
+    # from the granules).
+    VA_DESCRIPTION = "velocity in radar azimuth direction"
+    VR_DESCRIPTION = "velocity in radar range direction"
+    VP_DESCRIPTION = "velocity magnitude determined by projecting radar " \
+        "range measurements onto an a priori flow vector. Where projected " \
+        "errors are larger than those determined from range and azimuth " \
+        "measurements, unprojected v estimates are used"
+    VP_ERROR_DESCRIPTION = "velocity magnitude error determined by projecting " \
+        "radar range measurements onto an a priori flow vector. " \
+        "Where projected errors are larger than those determined from range " \
+        "and azimuth measurements, unprojected v_error estimates are used"
+    VXP_DESCRIPTION = "x-direction velocity determined by projecting radar " \
+        "range measurements onto an a priori flow vector. Where projected " \
+        "errors are larger than those determined from range and azimuth " \
+        "measurements, unprojected vx estimates are used"
+    VYP_DESCRIPTION = "y-direction velocity determined by projecting radar " \
+        "range measurements onto an a priori flow vector. Where projected " \
+        "errors are larger than those determined from range and azimuth " \
+        "measurements, unprojected vy estimates are used"
+
+    V_ERROR_DESCRIPTION_STR = 'velocity magnitude error'
+    INTERP_MASK_DESCRIPTION_STR = "light interpolation mask"
+    CHIP_SIZE_COORDS_STR = "Optical data: chip_size_coordinates = " \
         "'image projection geometry: width = x, height = y'. Radar data: " \
         "chip_size_coordinates = 'radar geometry: width = range, height = azimuth'"
     CHIP_SIZE_HEIGHT_STR = "height of search window"
+    CHIP_SIZE_WIDTH_STR  = "width of search window"
     FLAG_STABLE_SHIFT_MEANINGS_STR = \
         "flag for applying velocity bias correction over stable surfaces " \
         "(stationary or slow-flowing surfaces with velocity < 15 m/yr): " \
@@ -624,6 +664,85 @@ class ITSCube:
         return empty, int(ds.UTM_Projection.spatial_epsg), mid_date, ds_url, \
             mask_data
 
+    def process_v_attributes(self, var_name: str, is_first_write: bool, mid_date_coord):
+        """
+        Helper method to clean up attributes for v-related data variables.
+        """
+        # Process attributes
+        if DataVars.STABLE_APPLY_DATE in self.layers[var_name].attrs:
+            # Remove optical legacy attribute if it propagated to the cube data
+            del self.layers[var_name].attrs[DataVars.STABLE_APPLY_DATE]
+
+        # If attribute is propagated as cube's data var attribute, delete it.
+        # These attributes were collected based on 'v' data variable
+        if DataVars.GRID_MAPPING in self.layers[var_name].attrs:
+            del self.layers[var_name].attrs[DataVars.GRID_MAPPING]
+        if DataVars.MAP_SCALE_CORRECTED in self.layers[var_name].attrs:
+            del self.layers[var_name].attrs[DataVars.MAP_SCALE_CORRECTED]
+        if DataVars.STABLE_SHIFT_APPLIED in self.layers[var_name].attrs:
+            del self.layers[var_name].attrs[DataVars.STABLE_SHIFT_APPLIED]
+
+        # TODO: discuss in person
+        _name_sep = '_'
+        error_name = _name_sep.join([var_name, 'error'])
+        self.layers[error_name] = xr.DataArray(
+            data=[self.get_data_var_attr(ds, var_name, error_name, DataVars.MISSING_VALUE) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+        # If attribute is propagated as cube's data var attribute, delete it
+        if error_name in self.layers[var_name].attrs:
+            del self.layers[var_name].attrs[error_name]
+
+        # TODO: discuss in person
+        # self.layers[DataVars.STABLE_RMSE] = xr.DataArray(
+        #     data=[self.get_data_var_attr(ds, var_name, DataVars.STABLE_RMSE, DataVars.MISSING_VALUE) for ds in self.ds],
+        #     coords=[mid_date_coord],
+        #     dims=[Coords.MID_DATE]
+        # )
+        # If attribute is propagated as cube's data var attribute, delete it
+        if DataVars.STABLE_RMSE in self.layers[var_name].attrs:
+            del self.layers[var_name].attrs[DataVars.STABLE_RMSE]
+
+        # This attribute appears for all v* data variables, capture it only once
+        if DataVars.STABLE_COUNT not in self.layers:
+            self.layers[DataVars.STABLE_COUNT] = xr.DataArray(
+                data=[self.get_data_var_attr(ds, var_name, DataVars.STABLE_COUNT) for ds in self.ds],
+                coords=[mid_date_coord],
+                dims=[Coords.MID_DATE]
+            )
+        if DataVars.STABLE_COUNT in self.layers[var_name].attrs:
+            del self.layers[var_name].attrs[DataVars.STABLE_COUNT]
+
+        # This flag appears for vx and vy data variables, capture it only once.
+        # "stable_shift_applied" was incorrectly set in the optical legacy dataset
+        # and should be set to the no data value
+        if DataVars.FLAG_STABLE_SHIFT not in self.layers:
+            missing_stable_shift_value = 0.0
+            self.layers[DataVars.FLAG_STABLE_SHIFT] = xr.DataArray(
+                data=[self.get_data_var_attr(ds, var_name, DataVars.FLAG_STABLE_SHIFT, missing_stable_shift_value) for ds in self.ds],
+                coords=[mid_date_coord],
+                dims=[Coords.MID_DATE]
+            )
+            # Set flag meaning description
+            self.layers[DataVars.FLAG_STABLE_SHIFT].attrs[DataVars.FLAG_STABLE_SHIFT_MEANINGS] = DataVars.FLAG_STABLE_SHIFT_MEANINGS_STR
+
+        # Create data variable specific 'stable_shift' data variable,
+        # for example, 'vx_stable_shift' for 'vx' data variable
+        shift_var_name = _name_sep.join([var_name, DataVars.STABLE_SHIFT])
+        self.layers[shift_var_name] = xr.DataArray(
+            data=[self.get_data_var_attr(ds, var_name, DataVars.STABLE_SHIFT, DataVars.MISSING_VALUE) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+        # If attribute is propagated as cube's vx attribute, delete it
+        if DataVars.STABLE_SHIFT in self.layers[var_name].attrs:
+            del self.layers[var_name].attrs[DataVars.STABLE_SHIFT]
+
+        # Return names of new data variables - to be included into "encoding" settings
+        # for writing to the file store.
+        return [error_name, shift_var_name]
+
     def combine_layers(self, output_dir, is_first_write=False):
         """
         Combine selected layers into one xr.Dataset object and write (append) it
@@ -661,13 +780,7 @@ class ITSCube:
         # Process 'v'
         self.layers[DataVars.V] = v_layers
         self.layers[DataVars.V].attrs[DataVars.DESCRIPTION] = DataVars.V_DESCRIPTION_STR
-
-        if is_first_write:
-            # Set missing_value only on first write to the disk store, otherwise
-            # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
-            if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.V].attrs:
-                # self.layers[DataVars.V] = self.layers[DataVars.V].fillna(DataVars.MISSING_VALUE)
-                self.layers[DataVars.V].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
+        new_v_vars = [DataVars.V]
 
         # Collect 'v' attributes: these repeat for v, vx, vy, keep only one copy
         # per datacube
@@ -680,6 +793,7 @@ class ITSCube:
         if DataVars.GRID_MAPPING in self.layers[DataVars.V].attrs:
             del self.layers[DataVars.V].attrs[DataVars.GRID_MAPPING]
 
+        # Create new data var to store map_scale_corrected v's attribute
         self.layers[DataVars.MAP_SCALE_CORRECTED] = xr.DataArray(
             data=[self.get_data_var_attr(ds, DataVars.V, DataVars.MAP_SCALE_CORRECTED, DataVars.MISSING_BYTE) for ds in self.ds],
             coords=[mid_date_coord],
@@ -702,72 +816,8 @@ class ITSCube:
         # Process 'vx'
         self.layers[DataVars.VX] = xr.concat([ds.vx for ds in self.ds], mid_date_coord)
         self.layers[DataVars.VX].attrs[DataVars.DESCRIPTION] = DataVars.VX_DESCRIPTION_STR
-
-        if is_first_write:
-            # Set missing_value only on first write to the disk store, otherwise
-            # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
-            if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.VX].attrs:
-                self.layers[DataVars.VX].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
-
-        # Collect 'vx' attributes
-        if DataVars.STABLE_APPLY_DATE in self.layers[DataVars.VX].attrs:
-            # Remove optical legacy attribute if it propagated to the cube data
-            del self.layers[DataVars.VX].attrs[DataVars.STABLE_APPLY_DATE]
-
-        # TODO: discuss in person
-        self.layers[DataVars.VX_ERROR] = xr.DataArray(
-            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.VX_ERROR, DataVars.MISSING_VALUE) for ds in self.ds],
-            coords=[mid_date_coord],
-            dims=[Coords.MID_DATE]
-        )
-        # If attribute is propagated as cube's vx attribute, delete it
-        if DataVars.VX_ERROR in self.layers[DataVars.VX].attrs:
-            del self.layers[DataVars.VX].attrs[DataVars.VX_ERROR]
-
-        # TODO: discuss in person
-        self.layers[DataVars.STABLE_RMSE] = xr.DataArray(
-            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.STABLE_RMSE, DataVars.MISSING_VALUE) for ds in self.ds],
-            coords=[mid_date_coord],
-            dims=[Coords.MID_DATE]
-        )
-        # If attribute is propagated as cube's vx attribute, delete it
-        if DataVars.STABLE_RMSE in self.layers[DataVars.VX].attrs:
-            del self.layers[DataVars.VX].attrs[DataVars.STABLE_RMSE]
-
-        # This attribute appears for vx and vy data variables, capture it only once
-        self.layers[DataVars.STABLE_COUNT] = xr.DataArray(
-            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.STABLE_COUNT) for ds in self.ds],
-            coords=[mid_date_coord],
-            dims=[Coords.MID_DATE]
-        )
-        # If attribute is propagated as cube's vx attribute, delete it
-        if DataVars.STABLE_COUNT in self.layers[DataVars.VX].attrs:
-            del self.layers[DataVars.VX].attrs[DataVars.STABLE_COUNT]
-
-        # This flag appears for vx and vy data variables, capture it only once.
-        # "stable_shift_applied" was incorrectly set in the optical legacy dataset
-        # and should be set to the no data value
-        missing_stable_shift_value = 0.0
-        self.layers[DataVars.FLAG_STABLE_SHIFT] = xr.DataArray(
-            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.FLAG_STABLE_SHIFT, missing_stable_shift_value) for ds in self.ds],
-            coords=[mid_date_coord],
-            dims=[Coords.MID_DATE]
-        )
-
-        # Set flag meaning description
-        self.layers[DataVars.FLAG_STABLE_SHIFT].attrs[DataVars.FLAG_STABLE_SHIFT_MEANINGS] = DataVars.FLAG_STABLE_SHIFT_MEANINGS_STR
-
-        # Create data variable name 'vx_stable_shift' at runtime
-        var_name = '_'.join([DataVars.VX, DataVars.STABLE_SHIFT])
-        self.layers[var_name] = xr.DataArray(
-            data=[self.get_data_var_attr(ds, DataVars.VX, DataVars.STABLE_SHIFT) for ds in self.ds],
-            coords=[mid_date_coord],
-            dims=[Coords.MID_DATE]
-        )
-        # If attribute is propagated as cube's vx attribute, delete it
-        if DataVars.STABLE_SHIFT in self.layers[DataVars.VX].attrs:
-            del self.layers[DataVars.VX].attrs[DataVars.STABLE_SHIFT]
-
+        new_v_vars.append(DataVars.VX)
+        new_v_vars.extend(self.process_v_attributes(DataVars.VX, is_first_write, mid_date_coord))
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.VX) for ds in self.ds]
         gc.collect()
@@ -775,74 +825,123 @@ class ITSCube:
         # Process 'vy'
         self.layers[DataVars.VY] = xr.concat([ds.vy for ds in self.ds], mid_date_coord)
         self.layers[DataVars.VY].attrs[DataVars.DESCRIPTION] = DataVars.VY_DESCRIPTION_STR
-
-        if is_first_write:
-            # Set missing_value only on first write to the disk store, otherwise
-            # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
-            if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.VY].attrs:
-                self.layers[DataVars.VY].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
-
-        # Collect 'vy' attributes
-        if DataVars.STABLE_APPLY_DATE in self.layers[DataVars.VY].attrs:
-            # Remove optical legacy attribute if it propagated to the cube data
-            del self.layers[DataVars.VY].attrs[DataVars.STABLE_APPLY_DATE]
-
-        # TODO: discuss in person
-        self.layers[DataVars.VY_ERROR] = xr.DataArray(
-            data=[self.get_data_var_attr(ds, DataVars.VY, DataVars.VY_ERROR, DataVars.MISSING_VALUE) for ds in self.ds],
-            coords=[mid_date_coord],
-            dims=[Coords.MID_DATE]
-        )
-        # If attribute is propagated as cube's vx attribute, delete it
-        if DataVars.VY_ERROR in self.layers[DataVars.VY].attrs:
-            del self.layers[DataVars.VY].attrs[DataVars.VY_ERROR]
-
-        # Create data variable name 'vy_stable_shift' at runtime
-        var_name = '_'.join([DataVars.VY, DataVars.STABLE_SHIFT])
-        self.layers[var_name] = xr.DataArray(
-            data=[self.get_data_var_attr(ds, DataVars.VY, DataVars.STABLE_SHIFT) for ds in self.ds],
-            coords=[mid_date_coord],
-            dims=[Coords.MID_DATE]
-        )
-        # If attribute is propagated as cube's vy attribute, delete it
-        if DataVars.STABLE_SHIFT in self.layers[DataVars.VY].attrs:
-            del self.layers[DataVars.VY].attrs[DataVars.STABLE_SHIFT]
+        new_v_vars.append(DataVars.VY)
+        new_v_vars.extend(self.process_v_attributes(DataVars.VY, is_first_write, mid_date_coord))
 
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.VY) for ds in self.ds]
         gc.collect()
 
+        # Process 'va'
+        self.layers[DataVars.VA] = xr.concat([self.get_data_var(ds, DataVars.VA) for ds in self.ds], mid_date_coord)
+        self.layers[DataVars.VA].attrs[DataVars.DESCRIPTION] = DataVars.VA_DESCRIPTION
+        new_v_vars.append(DataVars.VA)
+        new_v_vars.extend(self.process_v_attributes(DataVars.VA, is_first_write, mid_date_coord))
+
+        # Drop data variable as we don't need it anymore - free up memory
+        # Drop only from datasets that have it
+        self.ds = [ds.drop_vars(DataVars.VA) if DataVars.VA in ds else ds for ds in self.ds]
+        gc.collect()
+
+        # Process 'vr'
+        self.layers[DataVars.VR] = xr.concat([self.get_data_var(ds, DataVars.VR) for ds in self.ds], mid_date_coord)
+        self.layers[DataVars.VR].attrs[DataVars.DESCRIPTION] = DataVars.VR_DESCRIPTION
+        new_v_vars.append(DataVars.VR)
+        new_v_vars.extend(self.process_v_attributes(DataVars.VR, is_first_write, mid_date_coord))
+
+        # Drop data variable as we don't need it anymore - free up memory
+        # Drop only from datasets that have it
+        self.ds = [ds.drop_vars(DataVars.VR) if DataVars.VR in ds else ds for ds in self.ds]
+        gc.collect()
+
+        # Process 'vxp'
+        self.layers[DataVars.VXP] = xr.concat([self.get_data_var(ds, DataVars.VXP) for ds in self.ds], mid_date_coord)
+        self.layers[DataVars.VXP].attrs[DataVars.DESCRIPTION] = DataVars.VXP_DESCRIPTION
+        new_v_vars.append(DataVars.VXP)
+        new_v_vars.extend(self.process_v_attributes(DataVars.VXP, is_first_write, mid_date_coord))
+
+        # Drop data variable as we don't need it anymore - free up memory
+        # Drop only from datasets that have it
+        self.ds = [ds.drop_vars(DataVars.VXP) if DataVars.VXP in ds else ds for ds in self.ds]
+        gc.collect()
+
+        # Process 'vyp'
+        self.layers[DataVars.VYP] = xr.concat([self.get_data_var(ds, DataVars.VYP) for ds in self.ds], mid_date_coord)
+        self.layers[DataVars.VYP].attrs[DataVars.DESCRIPTION] = DataVars.VYP_DESCRIPTION
+        new_v_vars.append(DataVars.VYP)
+        new_v_vars.extend(self.process_v_attributes(DataVars.VYP, is_first_write, mid_date_coord))
+
+        # Drop data variable as we don't need it anymore - free up memory
+        # Drop only from datasets that have it
+        self.ds = [ds.drop_vars(DataVars.VYP) if DataVars.VYP in ds else ds for ds in self.ds]
+        gc.collect()
+
         # Process chip_size_height
         self.layers[DataVars.CHIP_SIZE_HEIGHT] = xr.concat([ds.chip_size_height for ds in self.ds], mid_date_coord)
+        if is_first_write:
+            self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
 
         # Collect 'chip_size_height' attributes
-        self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.CHIP_SIZE_COORDINATES] = DataVars.CHIP_SIZE_COORDINATES_STR
+        self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.CHIP_SIZE_COORDS] = DataVars.CHIP_SIZE_COORDS_STR
         self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.DESCRIPTION] = DataVars.CHIP_SIZE_HEIGHT_STR
+        # If attribute is propagated as cube's data attribute, delete it
+        if DataVars.GRID_MAPPING in self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs:
+            del self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.GRID_MAPPING]
 
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.CHIP_SIZE_HEIGHT) for ds in self.ds]
         gc.collect()
 
+        # Process chip_size_width
         self.layers[DataVars.CHIP_SIZE_WIDTH] = xr.concat([ds.chip_size_width for ds in self.ds], mid_date_coord)
+        if is_first_write:
+            self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
+
+        # Collect 'chip_size_width' attributes
+        self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.CHIP_SIZE_COORDS] = DataVars.CHIP_SIZE_COORDS_STR
+        self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.DESCRIPTION] = DataVars.CHIP_SIZE_WIDTH_STR
+        # If attribute is propagated as cube's data attribute, delete it
+        if DataVars.GRID_MAPPING in self.layers[DataVars.CHIP_SIZE_WIDTH].attrs:
+            del self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.GRID_MAPPING]
+
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.CHIP_SIZE_WIDTH) for ds in self.ds]
         gc.collect()
 
+        # Process interp_mask
         self.layers[DataVars.INTERP_MASK] = xr.concat([ds.interp_mask for ds in self.ds], mid_date_coord)
+        self.layers[DataVars.INTERP_MASK].attrs[DataVars.DESCRIPTION] = DataVars.INTERP_MASK_DESCRIPTION_STR
+
+        if is_first_write:
+            self.layers[DataVars.INTERP_MASK].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
+
+        # If attribute is propagated as cube's data attribute, delete it as
+        # it's a data variable on its own.
+        if DataVars.GRID_MAPPING in self.layers[DataVars.INTERP_MASK].attrs:
+            del self.layers[DataVars.INTERP_MASK].attrs[DataVars.GRID_MAPPING]
+
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.INTERP_MASK) for ds in self.ds]
         gc.collect()
 
+        # Process 'v_error'
         self.layers[DataVars.V_ERROR] = xr.concat([self.get_data_var(ds, DataVars.V_ERROR) for ds in self.ds] , mid_date_coord)
-        if is_first_write:
-            # Have to set missing_value only on first write to the disk store
-            if DataVars.MISSING_VALUE_ATTR not in self.layers[DataVars.V_ERROR].attrs:
-                self.layers[DataVars.V_ERROR].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
+        new_v_vars.append(DataVars.V_ERROR)
+
+        # Collect 'v_error' attributes
+        # If attribute is propagated as cube's data attribute, delete it as
+        # it's a data variable on its own.
+        if DataVars.GRID_MAPPING in self.layers[DataVars.V_ERROR].attrs:
+            del self.layers[DataVars.V_ERROR].attrs[DataVars.GRID_MAPPING]
+
+        self.layers[DataVars.V_ERROR].attrs[DataVars.DESCRIPTION] = DataVars.V_ERROR_DESCRIPTION_STR
+        self.layers[DataVars.V_ERROR].attrs[DataVars.STD_NAME] = 'velocity_error'
+        self.layers[DataVars.V_ERROR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
 
         # Drop data variable as we don't need it anymore - free up memory
-        # TODO: Drop only from datasets that have it
-        # self.ds = [ds.drop_vars(DataVars.V_ERROR) for ds in self.ds]
-        # gc.collect()
+        # Drop only from datasets that have it
+        self.ds = [ds.drop_vars(DataVars.V_ERROR) if DataVars.V_ERROR in ds else ds for ds in self.ds]
+        gc.collect()
 
         time_delta = timeit.default_timer() - start_time
         print(f"Combined {len(self.urls)} layers (took {time_delta} seconds)")
@@ -858,13 +957,22 @@ class ITSCube:
             # DataVars.VX_ERROR, DataVars.STABLE_RMSE, DataVars.STABLE_COUNT - ?
             # DataVars.FLAG_STABLE_SHIFT - 0 as missing_value?
             # vx_stable_shift - ?
-            encoding_settings = {DataVars.V: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
-                                 DataVars.MAP_SCALE_CORRECTED: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
-                                 DataVars.VX: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
-                                 DataVars.VX_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
-                                 DataVars.VY: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
-                                 DataVars.VY_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+            # DataVars.VX_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+            # DataVars.VY_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE},
+
+            encoding_settings = {DataVars.MAP_SCALE_CORRECTED: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
+                                 DataVars.INTERP_MASK: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
+                                 DataVars.CHIP_SIZE_HEIGHT: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
+                                 DataVars.CHIP_SIZE_WIDTH: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
                                  DataVars.V_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}}
+            for each in new_v_vars:
+                encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}
+
+                if is_first_write:
+                    # Set missing_value only on first write to the disk store, otherwise
+                    # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
+                    if DataVars.MISSING_VALUE_ATTR not in self.layers[each].attrs:
+                        self.layers[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
 
             # This is first write, create Zarr store
             self.layers.to_zarr(output_dir, encoding = encoding_settings)
