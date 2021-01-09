@@ -72,7 +72,8 @@ class DataVars:
     CHIP_SIZE_COORDS  = 'chip_size_coordinates'
 
     INTERP_MASK      = 'interp_mask'
-    V_ERROR          = 'v_error' # Optical and Radar only
+    V_ERROR          = 'v_error' # Optical and Radar formats only
+    # Radar format only:
     VA               = 'va'
     VP               = 'vp'
     VP_ERROR         = 'vp_error'
@@ -80,7 +81,8 @@ class DataVars:
     VX               = 'vx'
     VXP              = 'vxp'
     VYP              = 'vyp'
-    # Added for the datacube
+
+    # Specific to the datacube
     URL = 'url'
 
     # Missing values for data variables
@@ -88,14 +90,14 @@ class DataVars:
     MISSING_VALUE     = -32767.0
     MISSING_POS_VALUE = 32767.0
 
-    V_DESCRIPTION_STR = 'velocity magnitude'
-    VX_DESCRIPTION_STR = "velocity component in x direction"
-    VY_DESCRIPTION_STR = "velocity component in y direction"
+    V_DESCRIPTION = 'velocity magnitude'
+    VX_DESCRIPTION = "velocity component in x direction"
+    VY_DESCRIPTION = "velocity component in y direction"
 
     # These descriptions are based on Radar granule format. Have to set them
     # manually since there are no Radar format granules are available for
-    # processing yet (otherwise these attributes would be automatically picked up
-    # from the granules).
+    # processing just yet (otherwise these attributes would be automatically
+    # picked up from the granules).
     VA_DESCRIPTION = "velocity in radar azimuth direction"
     VR_DESCRIPTION = "velocity in radar range direction"
     VP_DESCRIPTION = "velocity magnitude determined by projecting radar " \
@@ -128,12 +130,52 @@ class DataVars:
         "0 = there is no stable surface available and no correction is applied; " \
         "1 = there are stable surfaces and velocity bias is corrected;"
 
+    class ImgPairInfo:
+        """
+        Class to represent attributes of the "img_pair_info" data variable,
+        which become new data variables in the datacube to represent these
+        attributes for all layers in the datacube.
+        """
+        NAME = 'img_pair_info'
+
+        # Attributes
+        MISSION_IMG1              = 'mission_img1'
+        SENSOR_IMG1               = 'sensor_img1'
+        SATELLITE_IMG1            = 'satellite_img1'
+        ACQUISITION_IMG1          = 'acquisition_img1'
+        MISSION_IMG2              = 'mission_img2'
+        SENSOR_IMG2               = 'sensor_img2'
+        SATELLITE_IMG2            = 'satellite_img2'
+        ACQUISITION_IMG2          = 'acquisition_img2'
+        DATE_DT                   = 'date_dt'
+        DATE_CENTER               = 'date_center'
+        ROI_VALID_PERCENTAGE      = 'roi_valid_percentage'
+        AUTORIFT_SOFTWARE_VERSION = 'autoRIFT_software_version'
+
+        # Optical and optical legacy formats define them as:
+        AQUISITION_DATE_IMG1 = 'aquisition_date_img1'
+        AQUISITION_DATE_IMG2 = 'aquisition_date_img2'
+        ALL = [
+            MISSION_IMG1,
+            SENSOR_IMG1,
+            SATELLITE_IMG1,
+            MISSION_IMG2,
+            SENSOR_IMG2,
+            SATELLITE_IMG2,
+            DATE_DT,
+            DATE_CENTER,
+            ROI_VALID_PERCENTAGE,
+            AUTORIFT_SOFTWARE_VERSION
+        ]
 
 class ITSCube:
     """
     Class to build ITS_LIVE cube: time series of velocity pairs within a
     polygon of interest.
     """
+    # Current ITSCube software version
+    Version = '1.0'
+
     # Number of threads for parallel processing
     NUM_THREADS = 4
 
@@ -797,10 +839,15 @@ class ITSCube:
                 'institution': 'NASA Jet Propulsion Laboratory (JPL), California Institute of Technology',
                 'date_created': now_date,
                 'date_updated': now_date,
+                'software_version': ITSCube.Version,
                 'GDAL_AREA_OR_POINT': 'Area',
                 'projection': str(self.projection)
             }
         )
+
+        # Set attributes for 'url' data variable
+        self.layers[DataVars.URL].attrs[DataVars.STD_NAME] = 'granule_url'
+        self.layers[DataVars.URL].attrs[DataVars.STD_NAME] = 'original S3 bucket path of the granule'
 
         # ATTN: Assign one data variable at a time to avoid running out of memory.
         #       Delete each variable after it has been processed to free up the
@@ -808,7 +855,7 @@ class ITSCube:
 
         # Process 'v'
         self.layers[DataVars.V] = v_layers
-        self.layers[DataVars.V].attrs[DataVars.DESCRIPTION] = DataVars.V_DESCRIPTION_STR
+        self.layers[DataVars.V].attrs[DataVars.DESCRIPTION] = DataVars.V_DESCRIPTION
         new_v_vars = [DataVars.V]
 
         # Collect 'v' attributes: these repeat for v, vx, vy, keep only one copy
@@ -844,7 +891,7 @@ class ITSCube:
 
         # Process 'vx'
         self.layers[DataVars.VX] = xr.concat([ds.vx for ds in self.ds], mid_date_coord)
-        self.layers[DataVars.VX].attrs[DataVars.DESCRIPTION] = DataVars.VX_DESCRIPTION_STR
+        self.layers[DataVars.VX].attrs[DataVars.DESCRIPTION] = DataVars.VX_DESCRIPTION
         new_v_vars.append(DataVars.VX)
         new_v_vars.extend(self.process_v_attributes(DataVars.VX, is_first_write, mid_date_coord))
         # Drop data variable as we don't need it anymore - free up memory
@@ -853,7 +900,7 @@ class ITSCube:
 
         # Process 'vy'
         self.layers[DataVars.VY] = xr.concat([ds.vy for ds in self.ds], mid_date_coord)
-        self.layers[DataVars.VY].attrs[DataVars.DESCRIPTION] = DataVars.VY_DESCRIPTION_STR
+        self.layers[DataVars.VY].attrs[DataVars.DESCRIPTION] = DataVars.VY_DESCRIPTION
         new_v_vars.append(DataVars.VY)
         new_v_vars.extend(self.process_v_attributes(DataVars.VY, is_first_write, mid_date_coord))
 
@@ -926,7 +973,7 @@ class ITSCube:
         if is_first_write:
             self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
 
-        # Collect 'chip_size_width' attributes
+        # Collect  attributes
         self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.CHIP_SIZE_COORDS] = DataVars.CHIP_SIZE_COORDS_STR
         self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.DESCRIPTION] = DataVars.CHIP_SIZE_WIDTH_STR
         # If attribute is propagated as cube's data attribute, delete it
@@ -1010,6 +1057,39 @@ class ITSCube:
         self.ds = [ds.drop_vars(DataVars.VP) if DataVars.VP in ds else ds for ds in self.ds]
         gc.collect()
 
+        for each in DataVars.ImgPairInfo.ALL:
+            # Add new variables that correspond to attributes of 'img_pair_info'
+            # (only selected ones)
+            self.layers[each] = xr.DataArray(
+                data=[self.get_data_var_attr(ds, DataVars.ImgPairInfo.NAME, each) for ds in self.ds],
+                coords=[mid_date_coord],
+                dims=[Coords.MID_DATE]
+            )
+
+        # Handle acquisition time separately as it has different names in
+        # optical and radar formats
+        self.layers[DataVars.ImgPairInfo.ACQUISITION_IMG1] = xr.DataArray(
+            data=[
+                self.get_data_var_attr(
+                    ds, DataVars.ImgPairInfo.NAME, DataVars.ImgPairInfo.ACQUISITION_IMG1
+                ) if DataVars.ImgPairInfo.ACQUISITION_IMG1 in ds[DataVars.ImgPairInfo.NAME].attrs else
+                self.get_data_var_attr(
+                    ds, DataVars.ImgPairInfo.NAME, DataVars.ImgPairInfo.AQUISITION_DATE_IMG1
+                ) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
+        self.layers[DataVars.ImgPairInfo.ACQUISITION_IMG2] = xr.DataArray(
+            data=[
+                self.get_data_var_attr(
+                    ds, DataVars.ImgPairInfo.NAME, DataVars.ImgPairInfo.ACQUISITION_IMG2
+                ) if DataVars.ImgPairInfo.ACQUISITION_IMG2 in ds[DataVars.ImgPairInfo.NAME].attrs else
+                self.get_data_var_attr(
+                    ds, DataVars.ImgPairInfo.NAME, DataVars.ImgPairInfo.AQUISITION_DATE_IMG2
+                ) for ds in self.ds],
+            coords=[mid_date_coord],
+            dims=[Coords.MID_DATE]
+        )
 
         time_delta = timeit.default_timer() - start_time
         print(f"Combined {len(self.urls)} layers (took {time_delta} seconds)")
