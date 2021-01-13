@@ -66,7 +66,7 @@ class Grid:
                Bounds(min_value=y0_min, max_value=y0_max)
 
     @staticmethod
-    def create_grid(x: Bounds, y: Bounds, grid_spacing):
+    def create(x: Bounds, y: Bounds, grid_spacing):
         """
         Create new grid given the spacing and bounding box for the region.
         """

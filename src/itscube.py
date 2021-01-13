@@ -18,7 +18,7 @@ import xarray as xr
 
 # Local modules
 from itslive import itslive_ui
-from grid import Bounds
+from grid import Bounds, Grid
 
 
 class Coords:
@@ -35,20 +35,20 @@ class DataVars:
     Data variables for the data cube.
     """
     # Attributes that appear for multiple data variables
-    MISSING_VALUE_ATTR = 'missing_value'
-    FILL_VALUE_ATTR    = '_FillValue'
-    DESCRIPTION  = 'description'  # v, vx, vy
-    GRID_MAPPING = 'grid_mapping' # v, vx, vy - store only one
-    STABLE_COUNT = 'stable_count' # vx, vy    - store only one
-    STABLE_SHIFT = 'stable_shift' # vx, vy
+    MISSING_VALUE_ATTR         = 'missing_value'
+    FILL_VALUE_ATTR            = '_FillValue'
+    DESCRIPTION                = 'description'  # v, vx, vy
+    GRID_MAPPING               = 'grid_mapping' # v, vx, vy - store only one
+    STABLE_COUNT               = 'stable_count' # vx, vy    - store only one
+    STABLE_SHIFT               = 'stable_shift' # vx, vy
     FLAG_STABLE_SHIFT_MEANINGS = 'flag_stable_shift_meanings' # vx, vy
 
     # Optical Legacy format only:
     STABLE_SHIFT_APPLIED = 'stable_shift_applied' # vx, vy - remove from attributes
-    STABLE_APPLY_DATE = 'stable_apply_date' # vx, vy - remove from attributes
+    STABLE_APPLY_DATE    = 'stable_apply_date' # vx, vy - remove from attributes
 
-    STD_NAME = 'standard_name'
-    UNITS = 'units'
+    STD_NAME  = 'standard_name'
+    UNITS     = 'units'
     M_Y_UNITS = 'm/y'
 
     # Original data variables and their attributes per ITS_LIVE granules.
@@ -90,45 +90,50 @@ class DataVars:
     MISSING_VALUE     = -32767.0
     MISSING_POS_VALUE = 32767.0
 
-    V_DESCRIPTION = 'velocity magnitude'
-    VX_DESCRIPTION = "velocity component in x direction"
-    VY_DESCRIPTION = "velocity component in y direction"
+    class Description:
+        """
+        Class to store description strings for all data variables and some
+        of their attributes.
+        """
+        V = "velocity magnitude"
+        VX = "velocity component in x direction"
+        VY = "velocity component in y direction"
 
-    # These descriptions are based on Radar granule format. Have to set them
-    # manually since there are no Radar format granules are available for
-    # processing just yet (otherwise these attributes would be automatically
-    # picked up from the granules).
-    VA_DESCRIPTION = "velocity in radar azimuth direction"
-    VR_DESCRIPTION = "velocity in radar range direction"
-    VP_DESCRIPTION = "velocity magnitude determined by projecting radar " \
-        "range measurements onto an a priori flow vector. Where projected " \
-        "errors are larger than those determined from range and azimuth " \
-        "measurements, unprojected v estimates are used"
-    VP_ERROR_DESCRIPTION = "velocity magnitude error determined by projecting " \
-        "radar range measurements onto an a priori flow vector. " \
-        "Where projected errors are larger than those determined from range " \
-        "and azimuth measurements, unprojected v_error estimates are used"
-    VXP_DESCRIPTION = "x-direction velocity determined by projecting radar " \
-        "range measurements onto an a priori flow vector. Where projected " \
-        "errors are larger than those determined from range and azimuth " \
-        "measurements, unprojected vx estimates are used"
-    VYP_DESCRIPTION = "y-direction velocity determined by projecting radar " \
-        "range measurements onto an a priori flow vector. Where projected " \
-        "errors are larger than those determined from range and azimuth " \
-        "measurements, unprojected vy estimates are used"
+        # These descriptions are based on Radar granule format. Have to set them
+        # manually since there are no Radar format granules are available for
+        # processing just yet (otherwise these attributes would be automatically
+        # picked up from the granules).
+        VA = "velocity in radar azimuth direction"
+        VR = "velocity in radar range direction"
+        VP = "velocity magnitude determined by projecting radar " \
+            "range measurements onto an a priori flow vector. Where projected " \
+            "errors are larger than those determined from range and azimuth " \
+            "measurements, unprojected v estimates are used"
+        VP_ERROR = "velocity magnitude error determined by projecting " \
+            "radar range measurements onto an a priori flow vector. " \
+            "Where projected errors are larger than those determined from range " \
+            "and azimuth measurements, unprojected v_error estimates are used"
+        VXP = "x-direction velocity determined by projecting radar " \
+            "range measurements onto an a priori flow vector. Where projected " \
+            "errors are larger than those determined from range and azimuth " \
+            "measurements, unprojected vx estimates are used"
+        VYP = "y-direction velocity determined by projecting radar " \
+            "range measurements onto an a priori flow vector. Where projected " \
+            "errors are larger than those determined from range and azimuth " \
+            "measurements, unprojected vy estimates are used"
 
-    V_ERROR_DESCRIPTION = 'velocity magnitude error'
-    INTERP_MASK_DESCRIPTION = "light interpolation mask"
-    CHIP_SIZE_COORDS_STR = "Optical data: chip_size_coordinates = " \
-        "'image projection geometry: width = x, height = y'. Radar data: " \
-        "chip_size_coordinates = 'radar geometry: width = range, height = azimuth'"
-    CHIP_SIZE_HEIGHT_STR = "height of search window"
-    CHIP_SIZE_WIDTH_STR  = "width of search window"
-    FLAG_STABLE_SHIFT_MEANINGS_STR = \
-        "flag for applying velocity bias correction over stable surfaces " \
-        "(stationary or slow-flowing surfaces with velocity < 15 m/yr): " \
-        "0 = there is no stable surface available and no correction is applied; " \
-        "1 = there are stable surfaces and velocity bias is corrected;"
+        V_ERROR = "velocity magnitude error"
+        INTERP_MASK = "light interpolation mask"
+        CHIP_SIZE_COORDS = "Optical data: chip_size_coordinates = " \
+            "'image projection geometry: width = x, height = y'. Radar data: " \
+            "chip_size_coordinates = 'radar geometry: width = range, height = azimuth'"
+        CHIP_SIZE_HEIGHT = "height of search window"
+        CHIP_SIZE_WIDTH = "width of search window"
+        FLAG_STABLE_SHIFT_MEANINGS = \
+            "flag for applying velocity bias correction over stable surfaces " \
+            "(stationary or slow-flowing surfaces with velocity < 15 m/yr): " \
+            "0 = there is no stable surface available and no correction is applied; " \
+            "1 = there are stable surfaces and velocity bias is corrected;"
 
     class ImgPairInfo:
         """
@@ -204,6 +209,9 @@ class ITSCube:
     # Number of granules to write to the file at a time.
     NUM_GRANULES_TO_WRITE = 1000
 
+    # Grid cell size for the datacube.
+    CELL_SIZE = 240.0
+
     def __init__(self, polygon: tuple, projection: str):
         """
         Initialize object.
@@ -218,6 +226,9 @@ class ITSCube:
         # Set min/max x/y values to filter region by
         self.x = Bounds([each[0] for each in polygon])
         self.y = Bounds([each[1] for each in polygon])
+
+        # Grid for the datacube based on its bounding polygon
+        self.grid_x, self.grid_y = Grid.create(self.x, self.y, ITSCube.CELL_SIZE)
 
         # Convert polygon from its target projection to longitude/latitude coordinates
         # which are used by granule search API
@@ -793,7 +804,7 @@ class ITSCube:
                 dims=[Coords.MID_DATE]
             )
             # Set flag meaning description
-            self.layers[DataVars.FLAG_STABLE_SHIFT].attrs[DataVars.FLAG_STABLE_SHIFT_MEANINGS] = DataVars.FLAG_STABLE_SHIFT_MEANINGS_STR
+            self.layers[DataVars.FLAG_STABLE_SHIFT].attrs[DataVars.FLAG_STABLE_SHIFT_MEANINGS] = DataVars.Description.FLAG_STABLE_SHIFT_MEANINGS
 
         # Create data variable specific 'stable_shift' data variable,
         # for example, 'vx_stable_shift' for 'vx' data variable
@@ -830,8 +841,8 @@ class ITSCube:
             data_vars = {DataVars.URL: ([Coords.MID_DATE], self.urls)},
             coords = {
                 Coords.MID_DATE: self.dates,
-                Coords.X: v_layers.coords[Coords.X],
-                Coords.Y: v_layers.coords[Coords.Y]
+                Coords.X: self.grid_x,
+                Coords.Y: self.grid_y
             },
             attrs = {
                 'title': 'ITS_LIVE datacube of image_pair velocities',
@@ -855,7 +866,7 @@ class ITSCube:
 
         # Process 'v'
         self.layers[DataVars.V] = v_layers
-        self.layers[DataVars.V].attrs[DataVars.DESCRIPTION] = DataVars.V_DESCRIPTION
+        self.layers[DataVars.V].attrs[DataVars.DESCRIPTION] = DataVars.Description.V
         new_v_vars = [DataVars.V]
 
         # Collect 'v' attributes: these repeat for v, vx, vy, keep only one copy
@@ -891,7 +902,7 @@ class ITSCube:
 
         # Process 'vx'
         self.layers[DataVars.VX] = xr.concat([ds.vx for ds in self.ds], mid_date_coord)
-        self.layers[DataVars.VX].attrs[DataVars.DESCRIPTION] = DataVars.VX_DESCRIPTION
+        self.layers[DataVars.VX].attrs[DataVars.DESCRIPTION] = DataVars.Description.VX
         new_v_vars.append(DataVars.VX)
         new_v_vars.extend(self.process_v_attributes(DataVars.VX, is_first_write, mid_date_coord))
         # Drop data variable as we don't need it anymore - free up memory
@@ -900,7 +911,7 @@ class ITSCube:
 
         # Process 'vy'
         self.layers[DataVars.VY] = xr.concat([ds.vy for ds in self.ds], mid_date_coord)
-        self.layers[DataVars.VY].attrs[DataVars.DESCRIPTION] = DataVars.VY_DESCRIPTION
+        self.layers[DataVars.VY].attrs[DataVars.DESCRIPTION] = DataVars.Description.VY
         new_v_vars.append(DataVars.VY)
         new_v_vars.extend(self.process_v_attributes(DataVars.VY, is_first_write, mid_date_coord))
 
@@ -910,7 +921,7 @@ class ITSCube:
 
         # Process 'va'
         self.layers[DataVars.VA] = xr.concat([self.get_data_var(ds, DataVars.VA) for ds in self.ds], mid_date_coord)
-        self.layers[DataVars.VA].attrs[DataVars.DESCRIPTION] = DataVars.VA_DESCRIPTION
+        self.layers[DataVars.VA].attrs[DataVars.DESCRIPTION] = DataVars.Description.VA
         new_v_vars.append(DataVars.VA)
         new_v_vars.extend(self.process_v_attributes(DataVars.VA, is_first_write, mid_date_coord))
 
@@ -921,7 +932,7 @@ class ITSCube:
 
         # Process 'vr'
         self.layers[DataVars.VR] = xr.concat([self.get_data_var(ds, DataVars.VR) for ds in self.ds], mid_date_coord)
-        self.layers[DataVars.VR].attrs[DataVars.DESCRIPTION] = DataVars.VR_DESCRIPTION
+        self.layers[DataVars.VR].attrs[DataVars.DESCRIPTION] = DataVars.Description.VR
         new_v_vars.append(DataVars.VR)
         new_v_vars.extend(self.process_v_attributes(DataVars.VR, is_first_write, mid_date_coord))
 
@@ -932,7 +943,7 @@ class ITSCube:
 
         # Process 'vxp'
         self.layers[DataVars.VXP] = xr.concat([self.get_data_var(ds, DataVars.VXP) for ds in self.ds], mid_date_coord)
-        self.layers[DataVars.VXP].attrs[DataVars.DESCRIPTION] = DataVars.VXP_DESCRIPTION
+        self.layers[DataVars.VXP].attrs[DataVars.DESCRIPTION] = DataVars.Description.VXP
         new_v_vars.append(DataVars.VXP)
         new_v_vars.extend(self.process_v_attributes(DataVars.VXP, is_first_write, mid_date_coord))
 
@@ -943,7 +954,7 @@ class ITSCube:
 
         # Process 'vyp'
         self.layers[DataVars.VYP] = xr.concat([self.get_data_var(ds, DataVars.VYP) for ds in self.ds], mid_date_coord)
-        self.layers[DataVars.VYP].attrs[DataVars.DESCRIPTION] = DataVars.VYP_DESCRIPTION
+        self.layers[DataVars.VYP].attrs[DataVars.DESCRIPTION] = DataVars.Description.VYP
         new_v_vars.append(DataVars.VYP)
         new_v_vars.extend(self.process_v_attributes(DataVars.VYP, is_first_write, mid_date_coord))
 
@@ -958,8 +969,8 @@ class ITSCube:
             self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
 
         # Collect 'chip_size_height' attributes
-        self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.CHIP_SIZE_COORDS] = DataVars.CHIP_SIZE_COORDS_STR
-        self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.DESCRIPTION] = DataVars.CHIP_SIZE_HEIGHT_STR
+        self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.CHIP_SIZE_COORDS] = DataVars.Description.CHIP_SIZE_COORDS
+        self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.DESCRIPTION] = DataVars.Description.CHIP_SIZE_HEIGHT
         # If attribute is propagated as cube's data attribute, delete it
         if DataVars.GRID_MAPPING in self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs:
             del self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.GRID_MAPPING]
@@ -974,8 +985,8 @@ class ITSCube:
             self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
 
         # Collect  attributes
-        self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.CHIP_SIZE_COORDS] = DataVars.CHIP_SIZE_COORDS_STR
-        self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.DESCRIPTION] = DataVars.CHIP_SIZE_WIDTH_STR
+        self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.CHIP_SIZE_COORDS] = DataVars.Description.CHIP_SIZE_COORDS
+        self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.DESCRIPTION] = DataVars.Description.CHIP_SIZE_WIDTH
         # If attribute is propagated as cube's data attribute, delete it
         if DataVars.GRID_MAPPING in self.layers[DataVars.CHIP_SIZE_WIDTH].attrs:
             del self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.GRID_MAPPING]
@@ -986,7 +997,7 @@ class ITSCube:
 
         # Process interp_mask
         self.layers[DataVars.INTERP_MASK] = xr.concat([ds.interp_mask for ds in self.ds], mid_date_coord)
-        self.layers[DataVars.INTERP_MASK].attrs[DataVars.DESCRIPTION] = DataVars.INTERP_MASK_DESCRIPTION
+        self.layers[DataVars.INTERP_MASK].attrs[DataVars.DESCRIPTION] = DataVars.Description.INTERP_MASK
 
         if is_first_write:
             self.layers[DataVars.INTERP_MASK].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
@@ -1010,7 +1021,7 @@ class ITSCube:
         if DataVars.GRID_MAPPING in self.layers[DataVars.V_ERROR].attrs:
             del self.layers[DataVars.V_ERROR].attrs[DataVars.GRID_MAPPING]
 
-        self.layers[DataVars.V_ERROR].attrs[DataVars.DESCRIPTION] = DataVars.V_ERROR_DESCRIPTION
+        self.layers[DataVars.V_ERROR].attrs[DataVars.DESCRIPTION] = DataVars.Description.V_ERROR
         self.layers[DataVars.V_ERROR].attrs[DataVars.STD_NAME] = 'velocity_error'
         self.layers[DataVars.V_ERROR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
 
@@ -1029,7 +1040,7 @@ class ITSCube:
         if DataVars.GRID_MAPPING in self.layers[DataVars.VP].attrs:
             del self.layers[DataVars.VP].attrs[DataVars.GRID_MAPPING]
 
-        self.layers[DataVars.VP].attrs[DataVars.DESCRIPTION] = DataVars.VP_DESCRIPTION
+        self.layers[DataVars.VP].attrs[DataVars.DESCRIPTION] = DataVars.Description.VP
         self.layers[DataVars.VP].attrs[DataVars.STD_NAME] = 'projected_velocity'
         self.layers[DataVars.VP].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
 
@@ -1048,7 +1059,7 @@ class ITSCube:
         if DataVars.GRID_MAPPING in self.layers[DataVars.VP].attrs:
             del self.layers[DataVars.VP].attrs[DataVars.GRID_MAPPING]
 
-        self.layers[DataVars.VP_ERROR].attrs[DataVars.DESCRIPTION] = DataVars.VP_ERROR_DESCRIPTION
+        self.layers[DataVars.VP_ERROR].attrs[DataVars.DESCRIPTION] = DataVars.Description.VP_ERROR
         self.layers[DataVars.VP_ERROR].attrs[DataVars.STD_NAME] = 'projected_velocity_error'
         self.layers[DataVars.VP_ERROR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
 
@@ -1099,21 +1110,24 @@ class ITSCube:
         if is_first_write:
             # ATTN: Must set _FillValue attribute for each data variable that has
             #       its missing_value attribute set
-            encoding_settings = {DataVars.MAP_SCALE_CORRECTED: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
-                                 DataVars.INTERP_MASK: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
-                                 DataVars.CHIP_SIZE_HEIGHT: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
-                                 DataVars.CHIP_SIZE_WIDTH: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
-                                 DataVars.V_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}}
+            encoding_settings = {
+                DataVars.MAP_SCALE_CORRECTED: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
+                DataVars.INTERP_MASK: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
+                DataVars.CHIP_SIZE_HEIGHT: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
+                DataVars.CHIP_SIZE_WIDTH: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
+                DataVars.V_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}
+            }
             for each in new_v_vars:
                 encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}
 
                 # Set missing_value only on first write to the disk store, otherwise
-                # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
+                # will get "ValueError: failed to prevent overwriting existing key
+                # missing_value in attrs."
                 if DataVars.MISSING_VALUE_ATTR not in self.layers[each].attrs:
                     self.layers[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
 
             # This is first write, create Zarr store
-            self.layers.to_zarr(output_dir, encoding = encoding_settings)
+            self.layers.to_zarr(output_dir, encoding=encoding_settings)
 
         else:
             # Append layers to existing Zarr store
@@ -1135,7 +1149,7 @@ class ITSCube:
         # Total number of skipped granules due to wrong projection
         sum_projs = sum([len(each) for each in self.skipped_proj_granules.values()])
 
-        print( "Skipped granules:")
+        print("Skipped granules:")
         print(f"      empty data       : {len(self.skipped_empty_granules)} ({100.0 * len(self.skipped_empty_granules)/num_urls}%)")
         print(f"      wrong projection : {sum_projs} ({100.0 * sum_projs/num_urls}%)")
         print(f"      double mid_date  : {len(self.skipped_double_granules)} ({100.0 * len(self.skipped_double_granules)/num_urls}%)")
