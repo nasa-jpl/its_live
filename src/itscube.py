@@ -39,6 +39,7 @@ class Coords:
             "milliseconds"
     }
 
+
 class DataVars:
     """
     Data variables for the data cube.
@@ -93,6 +94,12 @@ class DataVars:
 
     # Specific to the datacube
     URL = 's3_path'
+
+    # Data variable specific to the epsg code:
+    # * Polar_Stereographic when epsg code of 3031 or 3413
+    # * UTM_Projection when epsg code of 326** or 327**
+    POLAR_STEREOGRAPHIC = 'Polar_Stereographic'
+    UTM_PROJECTION = 'UTM_Projection'
 
     # Missing values for data variables
     MISSING_BYTE      = 0.0
@@ -969,6 +976,18 @@ class ITSCube:
         self.layers[DataVars.URL].attrs[DataVars.STD_NAME] = DataVars.URL
         self.layers[DataVars.URL].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.URL]
 
+        # Set it once for the whole datacube
+        if is_first_write:
+            if DataVars.POLAR_STEREOGRAPHIC in self.ds[0]:
+                # Can't copy the whole data variable, it introduces coordinates
+                # for some reason. Just copy all attributes and set values to None.
+                self.layers[DataVars.POLAR_STEREOGRAPHIC] = xr.DataArray(None, attrs=self.ds[0][DataVars.POLAR_STEREOGRAPHIC].attrs)
+
+            elif DataVars.UTM_PROJECTION in self.ds[0]:
+                # Can't copy the whole data variable, it introduces coordinates
+                # for some reason. Just copy all attributes and set values to None.
+                self.layers[DataVars.UTM_PROJECTION] = xr.DataArray(None, attrs=self.ds[0][DataVars.UTM_PROJECTION].attrs)
+
         # ATTN: Assign one data variable at a time to avoid running out of memory.
         #       Delete each variable after it has been processed to free up the
         #       memory.
@@ -1255,11 +1274,13 @@ class ITSCube:
                     self.layers[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
 
             # This is first write, create Zarr store
-            self.layers.to_zarr(output_dir, encoding=encoding_settings, consolidated=True)
+            # self.layers.to_zarr(output_dir, encoding=encoding_settings, consolidated=True)
+            self.layers.to_zarr(output_dir, encoding=encoding_settings)
 
         else:
             # Append layers to existing Zarr store
-            self.layers.to_zarr(output_dir, append_dim=Coords.MID_DATE, consolidated=True)
+            # self.layers.to_zarr(output_dir, append_dim=Coords.MID_DATE, consolidated=True)
+            self.layers.to_zarr(output_dir, append_dim=Coords.MID_DATE)
 
         time_delta = timeit.default_timer() - start_time
         print(f"Wrote {len(self.urls)} layers to {output_dir} (took {time_delta} seconds)")
