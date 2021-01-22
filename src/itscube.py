@@ -158,6 +158,8 @@ class DataVars:
         """
         NAME = 'img_pair_info'
 
+        DATE_UNITS = 'days since 1970-01-01'
+
         # Attributes
         MISSION_IMG1              = 'mission_img1'
         SENSOR_IMG1               = 'sensor_img1'
@@ -240,7 +242,10 @@ class DataVars:
         }
 
         UNITS = {
-            DATE_DT: 'days'
+            DATE_DT: 'days',
+            # ACQUISITION_IMG1: DATE_UNITS,
+            # ACQUISITION_IMG2: DATE_UNITS,
+            # DATE_CENTER: DATE_UNITS
         }
 
 class ITSCube:
@@ -563,7 +568,21 @@ class ITSCube:
             TODO: This is a temporary solution to a very long time to open remote granules. Should not be used
                   when running the code at AWS.
         """
-        s3_out, cube_store = ITSCube.init_output_store(output_dir)
+        # s3_out, cube_store = ITSCube.init_output_store(output_dir)
+
+        cube_store = output_dir
+        s3_out = None
+        if ITSCube.S3_PREFIX not in output_dir:
+            # If writing to the local directory, remove datacube store if it exists
+            if os.path.exists(output_dir):
+                shutil.rmtree(output_dir)
+
+        else:
+            # When writing to the AWS S3 bucket, assume it's a new datacube.
+            # Open S3FS access to S3 bucket with output granules
+            s3_out = s3fs.S3FileSystem()
+            cube_store = s3fs.S3Map(root=output_dir, s3=s3_out, check=False)
+            # cube_store = s3_out.open(output_dir, mode='wb')
 
         self.clear()
         found_urls = self.request_granules(api_params, num_granules)
@@ -749,8 +768,13 @@ class ITSCube:
 
             if to_date is True:
                 try:
-                    # Extract only date portion of the time stamp
-                    value = datetime.strptime(value[0:8], '%Y%m%d')
+                    if len(value) == 8:
+                        # Only date is provided
+                        value = datetime.strptime(value[0:8], '%Y%m%d')
+
+                    elif len(value) > 8:
+                        # Extract date and time (20200617T00:00:00)
+                        value = datetime.strptime(value, '%Y%m%dT%H:%M:%S')
 
                 except ValueError as exc:
                     raise RuntimeError(f"Error converting {value} to date format '%Y%m%d': {exc}")
@@ -967,7 +991,7 @@ class ITSCube:
             }
         )
         # Set attributes for the "mid_date" coordinate.
-        # TODO: do not propagate to the Zarr store for some reason - ???
+        # TODO: attributes do not propagate to the Zarr store for some reason - ???
         self.layers[Coords.MID_DATE].attrs[DataVars.STD_NAME] = Coords.STD_NAME[Coords.MID_DATE]
         self.layers[Coords.MID_DATE].attrs[DataVars.DESCRIPTION_ATTR] = Coords.DESCRIPTION[Coords.MID_DATE]
         # print("MID_DATE: ", self.layers.coords[Coords.MID_DATE])
@@ -976,17 +1000,27 @@ class ITSCube:
         self.layers[DataVars.URL].attrs[DataVars.STD_NAME] = DataVars.URL
         self.layers[DataVars.URL].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.URL]
 
-        # Set it once for the whole datacube
+        # Set projection information once for the whole datacube
         if is_first_write:
+            proj_data = None
             if DataVars.POLAR_STEREOGRAPHIC in self.ds[0]:
-                # Can't copy the whole data variable, it introduces coordinates
-                # for some reason. Just copy all attributes and set values to None.
-                self.layers[DataVars.POLAR_STEREOGRAPHIC] = xr.DataArray(None, attrs=self.ds[0][DataVars.POLAR_STEREOGRAPHIC].attrs)
+                proj_data = DataVars.POLAR_STEREOGRAPHIC
 
             elif DataVars.UTM_PROJECTION in self.ds[0]:
-                # Can't copy the whole data variable, it introduces coordinates
-                # for some reason. Just copy all attributes and set values to None.
-                self.layers[DataVars.UTM_PROJECTION] = xr.DataArray(None, attrs=self.ds[0][DataVars.UTM_PROJECTION].attrs)
+                proj_data = DataVars.UTM_PROJECTION
+
+            # Should never happen - just in case :)
+            if proj_data is None:
+                raise RuntimeError(f"Missing {DataVars.POLAR_STEREOGRAPHIC} or {DataVars.UTM_PROJECTION} in {self.urls[0]}")
+
+            # Can't copy the whole data variable, as it introduces obscure coordinates.
+            # Just copy all attributes for the scalar type of the xr.DataArray.
+            self.layers[proj_data] = xr.DataArray(
+                data='',
+                attrs=self.ds[0][proj_data].attrs,
+                coords={},
+                dims=[]
+            )
 
         # ATTN: Assign one data variable at a time to avoid running out of memory.
         #       Delete each variable after it has been processed to free up the
@@ -1229,7 +1263,8 @@ class ITSCube:
             dims=[Coords.MID_DATE],
             attrs={
                 DataVars.STD_NAME: DataVars.ImgPairInfo.STD_NAME[var_name],
-                DataVars.DESCRIPTION_ATTR: DataVars.ImgPairInfo.DESCRIPTION[var_name]
+                DataVars.DESCRIPTION_ATTR: DataVars.ImgPairInfo.DESCRIPTION[var_name],
+                # DataVars.UNITS: DataVars.ImgPairInfo.UNITS[var_name]
             }
         )
         var_name = DataVars.ImgPairInfo.ACQUISITION_IMG2
@@ -1245,7 +1280,8 @@ class ITSCube:
             dims=[Coords.MID_DATE],
             attrs={
                 DataVars.STD_NAME: DataVars.ImgPairInfo.STD_NAME[var_name],
-                DataVars.DESCRIPTION_ATTR: DataVars.ImgPairInfo.DESCRIPTION[var_name]
+                DataVars.DESCRIPTION_ATTR: DataVars.ImgPairInfo.DESCRIPTION[var_name],
+                # DataVars.UNITS: DataVars.ImgPairInfo.UNITS[var_name]
             }
         )
 
@@ -1272,6 +1308,10 @@ class ITSCube:
                 # missing_value in attrs."
                 if DataVars.MISSING_VALUE_ATTR not in self.layers[each].attrs:
                     self.layers[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
+            # Set units for all datetime objects
+            for each in [DataVars.ImgPairInfo.ACQUISITION_IMG1, DataVars.ImgPairInfo.ACQUISITION_IMG2,
+                DataVars.ImgPairInfo.DATE_CENTER, Coords.MID_DATE]:
+                encoding_settings[each] = {DataVars.UNITS: DataVars.ImgPairInfo.DATE_UNITS}
 
             # This is first write, create Zarr store
             # self.layers.to_zarr(output_dir, encoding=encoding_settings, consolidated=True)
