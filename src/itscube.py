@@ -21,6 +21,13 @@ import xarray as xr
 from itslive import itslive_ui
 from grid import Bounds, Grid
 
+# Set up logging
+logging.basicConfig(
+    level = logging.INFO,
+    format = '%(asctime)s - %(levelname)s - %(message)s',
+    datefmt = '%Y-%m-%d %H:%M:%S'
+)
+
 
 class Coords:
     """
@@ -297,15 +304,9 @@ class ITSCube:
         projection: str
             Projection in which polygon is defined.
         """
-        logging.basicConfig(
-            level = logging.INFO,
-            format = '%(asctime)s - %(levelname)s - %(message)s',
-            datefmt = '%Y-%m-%d %H:%M:%S'
-        )
-
-        self._logger = logging.getLogger("datacube")
-        self._logger.info(f"Polygon: {polygon}")
-        self._logger.info(f"Projection: {projection}")
+        self.logger = logging.getLogger("datacube")
+        self.logger.info(f"Polygon: {polygon}")
+        self.logger.info(f"Projection: {projection}")
 
         self.projection = projection
 
@@ -328,7 +329,7 @@ class ITSCube:
             )
             self.polygon_coords.extend(coords)
 
-        self._logger.info(f"Longitude/latitude coords for polygon: {self.polygon_coords}")
+        self.logger.info(f"Polygon's longitude/latitude coordinates: {self.polygon_coords}")
 
         # Lists to store filtered by region/start_date/end_date velocity pairs
         # and corresponding metadata (middle dates (+ date separation in days as milliseconds),
@@ -394,7 +395,7 @@ class ITSCube:
         found_urls = [each['url'] for each in itslive_ui.get_granule_urls(params)]
         total_num = len(found_urls)
         time_delta = timeit.default_timer() - start_time
-        self._logger.info(f"Number of found by API granules: {total_num} (took {time_delta} seconds)")
+        self.logger.info(f"Number of found by API granules: {total_num} (took {time_delta} seconds)")
 
         if len(found_urls) == 0:
             raise RuntimeError(f"No granules are found for the search API parameters: {params}")
@@ -404,7 +405,7 @@ class ITSCube:
         #       sequentially at this point.
         if num_granules:
             found_urls = found_urls[:num_granules]
-            self._logger.info(f"Examining only first {len(found_urls)} out of {total_num} found granules")
+            self.logger.info(f"Examining only first {len(found_urls)} out of {total_num} found granules")
 
         return self.skip_duplicate_granules(found_urls)
 
@@ -457,7 +458,7 @@ class ITSCube:
                 url_mid_dates.append(mid_date)
                 keep_urls.append(each_url)
 
-        self._logger.info(f"Keeping {len(keep_urls)} unique granules")
+        self.logger.info(f"Keeping {len(keep_urls)} unique granules")
         return keep_urls
 
     @staticmethod
@@ -615,7 +616,7 @@ class ITSCube:
             # How many tasks to process at a time
             num_tasks = ITSCube.NUM_GRANULES_TO_WRITE if num_to_process > ITSCube.NUM_GRANULES_TO_WRITE else num_to_process
             tasks = [dask.delayed(self.read_s3_dataset)(each_file, s3) for each_file in found_urls[start:start+num_tasks]]
-            self._logger.info(f"Processing {len(tasks)} tasks")
+            self.logger.info(f"Processing {len(tasks)} tasks")
 
             results = None
             with ProgressBar():
@@ -714,7 +715,7 @@ class ITSCube:
         while num_to_process > 0:
             # How many tasks to process at a time
             num_tasks = ITSCube.NUM_GRANULES_TO_WRITE if num_to_process > ITSCube.NUM_GRANULES_TO_WRITE else num_to_process
-            self._logger.info("Number of granules to process: ", num_tasks)
+            self.logger.info("Number of granules to process: ", num_tasks)
 
             tasks = [dask.delayed(self.read_dataset)(each_file) for each_file in found_urls[start:start+num_tasks]]
             assert len(tasks) == num_tasks
@@ -976,7 +977,7 @@ class ITSCube:
         self.layers = {}
 
         # Construct xarray to hold layers by concatenating layer objects along 'mid_date' dimension
-        self._logger.info(f'Combine {len(self.urls)} layers to the {output_dir}...')
+        self.logger.info(f'Combine {len(self.urls)} layers to the {output_dir}...')
         start_time = timeit.default_timer()
         mid_date_coord = pd.Index(self.dates, name=Coords.MID_DATE)
 
@@ -1297,7 +1298,7 @@ class ITSCube:
         )
 
         time_delta = timeit.default_timer() - start_time
-        self._logger.info(f"Combined {len(self.urls)} layers (took {time_delta} seconds)")
+        self.logger.info(f"Combined {len(self.urls)} layers (took {time_delta} seconds)")
 
         start_time = timeit.default_timer()
         # Write to the Zarr store
@@ -1334,7 +1335,7 @@ class ITSCube:
             self.layers.to_zarr(output_dir, append_dim=Coords.MID_DATE)
 
         time_delta = timeit.default_timer() - start_time
-        self._logger.info(f"Wrote {len(self.urls)} layers to {output_dir} (took {time_delta} seconds)")
+        self.logger.info(f"Wrote {len(self.urls)} layers to {output_dir} (took {time_delta} seconds)")
 
         # Free up memory
         self.clear_vars()
@@ -1461,7 +1462,7 @@ if __name__ == '__main__':
     skipped_projs = {}
     if not args.parallel:
         # Process ITS_LIVE granules sequentially, look at provided number of granules only
-        print("Processing granules sequentially...")
+        cube.logger.info("Processing granules sequentially...")
         if args.localPath:
             # Granules are downloaded locally
             cube.create_from_local_no_api(args.outputDir, args.localPath)
@@ -1471,7 +1472,7 @@ if __name__ == '__main__':
 
     else:
         # Process ITS_LIVE granules in parallel, look at 100 first granules only
-        print("Processing granules in parallel...")
+        cube.logger.info("Processing granules in parallel...")
         if args.localPath:
             # Granules are downloaded locally
             cube.create_from_local_parallel_no_api(args.outputDir, args.localPath)
