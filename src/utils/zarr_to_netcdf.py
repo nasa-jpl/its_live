@@ -34,7 +34,60 @@ if __name__ == '__main__':
     time_delta = timeit.default_timer() - start_time
     print(f"Read Zarr {args.input} (took {time_delta} seconds)")
 
+    compression = {"compression": "lzf"}
+    encoding = {}
+
+    encode_data_vars = (
+        'v',
+        'v_error',
+        'map_scale_corrected',
+        'vx',
+        'vx_error',
+        'vx_stable_shift',
+        'flag_stable_shift',
+        'vy',
+        'vy_error',
+        'vy_stable_shift',
+        'chip_size_height',
+        'chip_size_width',
+        'interp_mask',
+        'va',
+        'va_error',
+        'va_stable_shift',
+        'vp',
+        'vp_error',
+        'vr',
+        'vr_error',
+        'vr_stable_shift',
+        'vxp',
+        'vxp_error',
+        'vxp_stable_shift',
+        'vyp',
+        'vyp_error',
+        'vyp_stable_shift',
+        'mission_img1',
+        'sensor_img1',
+        'satellite_img1',
+        'acquisition_img1',
+        'mission_img2',
+        'sensor_img2',
+        'satellite_img2',
+        'acquisition_img2',
+        'date_dt',
+        'date_center',
+        'roi_valid_percentage',
+        'autoRIFT_software_version'
+    )
+
+    # Set up compression for each of the data variables
+    for each in encode_data_vars:
+        encoding[each] = compression
+
     start_time = timeit.default_timer()
-    ds_zarr.to_netcdf(args.output, engine=args.engine)
+    ds_zarr.to_netcdf(
+        args.output,
+        engine=args.engine,
+        encoding = encoding
+    )
     time_delta = timeit.default_timer() - start_time
     print(f"Wrote dataset to NetCDF file {args.output} (took {time_delta} seconds)")
