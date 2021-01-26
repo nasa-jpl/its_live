@@ -22,7 +22,7 @@ if __name__ == '__main__':
                         help="Input Zarr store directory.")
     parser.add_argument('-o', '--output', type=str, required=True,
                         help="NetCDF filename to store data to.")
-    parser.add_argument('-e', '--engine', type=str, required=False, default='h5netcdf',
+    parser.add_argument('-e', '--engine', type=str, required=False, default='netcdf4',
                         help="NetCDF engine to use to store NetCDF data to the file. Default is 'h5netcdf'.")
 
     args = parser.parse_args()
@@ -34,7 +34,7 @@ if __name__ == '__main__':
     time_delta = timeit.default_timer() - start_time
     print(f"Read Zarr {args.input} (took {time_delta} seconds)")
 
-    compression = {"compression": "lzf"}
+    compression = {"zlib": True, "complevel": 1}
     encoding = {}
 
     encode_data_vars = (
