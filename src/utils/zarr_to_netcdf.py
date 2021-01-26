@@ -28,8 +28,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     start_time = timeit.default_timer()
-    # Don't decode time delta's as it
-    # ds_zarr = xr.open_zarr(args.input, consolidated=True, decode_timedelta=False)
+    # Don't decode time delta's as it does some internal conversion based on
+    # provided units
     ds_zarr = xr.open_zarr(args.input, decode_timedelta=False)
     time_delta = timeit.default_timer() - start_time
     print(f"Read Zarr {args.input} (took {time_delta} seconds)")
