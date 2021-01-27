@@ -844,20 +844,28 @@ class ITSCube:
             # Define which points are within target polygon.
             mask_lon = (ds.x >= self.x.min) & (ds.x <= self.x.max)
             mask_lat = (ds.y >= self.y.min) & (ds.y <= self.y.max)
-            mask_data = ds.where(mask_lon & mask_lat, drop=True)
-
-            # Another way to filter:
-            # cube_v = ds.v.sel(x=slice(self.x.min, self.x.max),y=slice(self.y.max, self.y.min)).copy()
-
-            # If it's a valid velocity layer, add it to the cube.
-            if np.any(mask_data.v.notnull()):
-                mask_data.load()
-
-            else:
-                # Reset cube back to None as it does not contain any valid data
+            mask = (mask_lon & mask_lat)
+            if mask.values.sum() == 0:
+                # One or both masks resulted in no coverage
                 mask_data = None
                 mid_date = None
                 empty = True
+
+            else:
+                mask_data = ds.where(mask, drop=True)
+
+                # Another way to filter:
+                # cube_v = ds.v.sel(x=slice(self.x.min, self.x.max),y=slice(self.y.max, self.y.min)).copy()
+
+                # If it's a valid velocity layer, add it to the cube.
+                if np.any(mask_data.v.notnull()):
+                    mask_data.load()
+
+                else:
+                    # Reset cube back to None as it does not contain any valid data
+                    mask_data = None
+                    mid_date = None
+                    empty = True
 
         # Have to return URL for the dataset, which is provided as an input to the method,
         # to track URL per granule in parallel processing
@@ -1325,6 +1333,8 @@ class ITSCube:
                 DataVars.ImgPairInfo.DATE_CENTER, Coords.MID_DATE]:
                 encoding_settings[each] = {DataVars.UNITS: DataVars.ImgPairInfo.DATE_UNITS}
 
+            self.logger.info(f"Encoding writing to Zarr: {encoding_settings}")
+
             # This is first write, create Zarr store
             # self.layers.to_zarr(output_dir, encoding=encoding_settings, consolidated=True)
             self.layers.to_zarr(output_dir, encoding=encoding_settings)
@@ -1425,6 +1435,14 @@ if __name__ == '__main__':
                         help="Zarr output directory to write cube data to. Default is 'cubedata.zarr'.")
     parser.add_argument('-c', '--chunks', type=int, default=1000,
                         help="Number of granules to write at a time. Default is 1000.")
+    parser.add_argument('--targetProjection', type=str, required=True,
+                        help="UTM target projection.")
+    parser.add_argument('--dimSize', type=float, default=100000,
+                        help="Cube dimension in meters.")
+    parser.add_argument('--centroid', nargs=2, metavar=('x', 'y'), type=float,
+                        action='store',
+                        help="Centroid point for the datacube in UTM projection.")
+
 
     args = parser.parse_args()
     ITSCube.NUM_THREADS = args.threads
@@ -1435,13 +1453,16 @@ if __name__ == '__main__':
     # =============================
     # Create polygon as a square around the centroid in target '32628' UTM projection
     # Projection for the polygon coordinates
-    projection = '32628'
+    # projection = '32628'
+    projection = args.targetProjection
 
     # Centroid for the tile in target projection
-    c_x, c_y = (487462, 9016243)
+    # c_x, c_y = (487462, 9016243)
+    c_x, c_y = args.centroid
 
     # Offset in meters (1 pixel=240m): 100 km square (with offset=50km)
-    off = 50000
+    # off = 50000
+    off = args.dimSize / 2.0
     polygon = (
         (c_x - off, c_y + off),
         (c_x + off, c_y + off),
@@ -1452,12 +1473,15 @@ if __name__ == '__main__':
     # Create cube object
     cube = ITSCube(polygon, projection)
 
+    cube.logger.info("Inputs: %s" %args)
+
     # Parameters for the search granule API
     API_params = {
         'start'               : '1984-01-01',
         'end'                 : '2021-01-01',
         'percent_valid_pixels': 1
     }
+    cube.logger.info("ITS_LIVE API parameters: %s" %API_params)
 
     skipped_projs = {}
     if not args.parallel:
