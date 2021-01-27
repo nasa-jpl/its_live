@@ -23,7 +23,7 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output', type=str, required=True,
                         help="NetCDF filename to store data to.")
     parser.add_argument('-e', '--engine', type=str, required=False, default='netcdf4',
-                        help="NetCDF engine to use to store NetCDF data to the file. Default is 'h5netcdf'.")
+                        help="NetCDF engine to use to store NetCDF data to the file.")
 
     args = parser.parse_args()
 
@@ -36,6 +36,39 @@ if __name__ == '__main__':
 
     compression = {"zlib": True, "complevel": 1}
     encoding = {}
+
+    encoding = {
+        'map_scale_corrected': {'_FillValue': 0.0},
+        'interp_mask': {'_FillValue': 0.0},
+        'chip_size_height': {'_FillValue': 0.0},
+        'chip_size_width': {'_FillValue': 0.0},
+        'v_error': {'_FillValue': -32767.0},
+        'v': {'_FillValue': -32767.0},
+        'vx': {'_FillValue': -32767.0},
+        'vx_error': {'_FillValue': -32767.0},
+        'vx_stable_shift': {'_FillValue': -32767.0},
+        'vy': {'_FillValue': -32767.0},
+        'vy_error': {'_FillValue': -32767.0},
+        'vy_stable_shift': {'_FillValue': -32767.0},
+        'va': {'_FillValue': -32767.0},
+        'va_error': {'_FillValue': -32767.0},
+        'va_stable_shift': {'_FillValue': -32767.0},
+        'vr': {'_FillValue': -32767.0},
+        'vr_error': {'_FillValue': -32767.0},
+        'vr_stable_shift': {'_FillValue': -32767.0},
+        'vxp': {'_FillValue': -32767.0},
+        'vxp_error': {'_FillValue': -32767.0},
+        'vxp_stable_shift': {'_FillValue': -32767.0},
+        'vyp': {'_FillValue': -32767.0},
+        'vyp_error': {'_FillValue': -32767.0},
+        'vyp_stable_shift': {'_FillValue': -32767.0},
+        'vp': {'_FillValue': -32767.0},
+        'vp_error': {'_FillValue': -32767.0},
+        'acquisition_img1': {'units': 'days since 1970-01-01'},
+        'acquisition_img2': {'units': 'days since 1970-01-01'},
+        'date_center': {'units': 'days since 1970-01-01'},
+        'mid_date': {'units': 'days since 1970-01-01'}
+    }
 
     encode_data_vars = (
         'v',
@@ -81,7 +114,7 @@ if __name__ == '__main__':
 
     # Set up compression for each of the data variables
     for each in encode_data_vars:
-        encoding[each] = compression
+        encoding.setdefault(each, {}).update(compression)
 
     start_time = timeit.default_timer()
     ds_zarr.to_netcdf(
