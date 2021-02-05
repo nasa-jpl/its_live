@@ -39,7 +39,7 @@ class Grid:
     L8B8_pix = 15
 
     @staticmethod
-    def bounding_box(x: Bounds, y: Bounds, grid_spacing) -> (Bounds, Bounds):
+    def bounding_box(x: Bounds, y: Bounds, grid_spacing: int) -> (Bounds, Bounds):
         """
         Define bounding box for provided coordinates.
         """
@@ -55,8 +55,8 @@ class Grid:
 
         # Determine grid edges
         x0_min = np.ceil(x.min/grid_spacing)*grid_spacing - Grid.L8B8_pix/2
-        y0_min = np.floor(y.min/grid_spacing)*grid_spacing + Grid.L8B8_pix/2
         x0_max = np.ceil(x.max/grid_spacing)*grid_spacing - Grid.L8B8_pix/2
+        y0_min = np.floor(y.min/grid_spacing)*grid_spacing + Grid.L8B8_pix/2
         y0_max = np.floor(y.max/grid_spacing)*grid_spacing + Grid.L8B8_pix/2
 
         # print("bounding_box: x_in: ", x)
@@ -72,7 +72,7 @@ class Grid:
         """
         # Calculate grid bounds
         x0, y0 = Grid.bounding_box(x, y, grid_spacing)
-        # print(f"Grid.create_grid: bounding box: x: {x0} y: {y0}" )
+        print(f"Grid.create: bounding box: x: {x0} y: {y0}" )
 
         # Generate vectors of grid centers
         # Cell center offset
