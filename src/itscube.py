@@ -292,6 +292,9 @@ class ITSCube:
     # Number of granules to write to the file at a time.
     NUM_GRANULES_TO_WRITE = 1000
 
+    # Directory to write verbose information about skipped granules
+    GRANULE_REPORT_DIR = 'logs'
+
     # Grid cell size for the datacube.
     CELL_SIZE = 240.0
 
@@ -351,6 +354,9 @@ class ITSCube:
         # Constructed cube
         self.layers = None
 
+        # Create log directory
+        os.makedirs(ITSCube.GRANULE_REPORT_DIR, exist_ok=True)
+
     def clear_vars(self):
         """
         Clear current set of cube layers.
@@ -391,11 +397,24 @@ class ITSCube:
         params = copy.deepcopy(api_params)
         params['polygon'] = ",".join([str(each) for each in self.polygon_coords])
 
+        self.logger.info(f"API params: {params}")
         start_time = timeit.default_timer()
         found_urls = [each['url'] for each in itslive_ui.get_granule_urls(params)]
         total_num = len(found_urls)
         time_delta = timeit.default_timer() - start_time
         self.logger.info(f"Number of found by API granules: {total_num} (took {time_delta} seconds)")
+
+        # A hack to include missing from DB granules for pre-1999 period
+        # (was used to generate MalaspinaGlacierCube_32607.zarr).
+        # url_prefix = 'http://its-live-data.jpl.nasa.gov.s3.amazonaws.com'
+        # url_original = 'its-live-data.jpl.nasa.gov'
+        # file_urls = []
+        # with open('missing_LT05_32607.txt') as fh:
+        #     file_urls=[line.rstrip() for line in fh]
+        #     file_urls=[each.replace(url_original, url_prefix) for each in file_urls]
+        #
+        # self.logger.info(f"Attaching {len(file_urls)} missing granules...")
+        # found_urls.extend(file_urls)
 
         if len(found_urls) == 0:
             raise RuntimeError(f"No granules are found for the search API parameters: {params}")
@@ -639,6 +658,7 @@ class ITSCube:
             gc.collect()
 
             self.combine_layers(cube_store, is_first_write)
+            self.format_stats()
 
             if start == 0:
                 is_first_write = False
@@ -660,7 +680,7 @@ class ITSCube:
         else:
             raise RuntimeError(f"Datacube data does not exist.")
 
-    def create_from_local_no_api(self, output_dir: str, dirpath='data'):
+    def create_from_local_no_api(self, output_dir: str, dirpath='data', num_granules=None):
         """
         Create velocity cube by accessing local data stored in "dirpath" directory.
 
@@ -673,6 +693,10 @@ class ITSCube:
         self.clear()
 
         found_urls = glob.glob(dirpath + os.sep + '*.nc')
+        if num_granules is not None:
+            found_urls = found_urls[0: num_granules]
+
+        self.num_urls_from_api = len(found_urls)
         found_urls = self.skip_duplicate_granules(found_urls)
         is_first_write = True
 
@@ -681,6 +705,7 @@ class ITSCube:
             with xr.open_dataset(each_url) as ds:
                 results = self.preprocess_dataset(ds, each_url)
                 self.add_layer(*results)
+
                 # Check if need to write to the file accumulated number of granules
                 if len(self.urls) == ITSCube.NUM_GRANULES_TO_WRITE:
                     self.combine_layers(cube_store, is_first_write)
@@ -694,7 +719,7 @@ class ITSCube:
 
         return found_urls
 
-    def create_from_local_parallel_no_api(self, output_dir: str, dirpath='data'):
+    def create_from_local_parallel_no_api(self, output_dir: str, dirpath='data', num_granules=None):
         """
         Create velocity cube from local data stored in "dirpath" in parallel.
 
@@ -706,7 +731,11 @@ class ITSCube:
 
         self.clear()
         found_urls = glob.glob(dirpath + os.sep + '*.nc')
+        if num_granules is not None:
+            found_urls = found_urls[0: num_granules]
+
         found_urls = self.skip_duplicate_granules(found_urls)
+        self.num_urls_from_api = len(found_urls)
 
         num_to_process = len(found_urls)
 
@@ -715,7 +744,7 @@ class ITSCube:
         while num_to_process > 0:
             # How many tasks to process at a time
             num_tasks = ITSCube.NUM_GRANULES_TO_WRITE if num_to_process > ITSCube.NUM_GRANULES_TO_WRITE else num_to_process
-            self.logger.info("Number of granules to process: ", num_tasks)
+            self.logger.info(f"Number of granules to process: {num_tasks}")
 
             tasks = [dask.delayed(self.read_dataset)(each_file) for each_file in found_urls[start:start+num_tasks]]
             assert len(tasks) == num_tasks
@@ -763,24 +792,37 @@ class ITSCube:
 
     @staticmethod
     def get_data_var_attr(
-        ds: xr.Dataset, var_name: str, attr_name: str, missing_value: int = None,
+        ds: xr.Dataset,
+        ds_url: str,
+        var_name: str,
+        attr_name: str,
+        missing_value: int = None,
         to_date=False):
         """
         Return a list of attributes for the data variable in data set if it exists,
         or missing_value if it is not present.
-        If missing_value is set to None, than attribute is expected to exist for
-        the data variable "var_name".
+        If missing_value is set to None, than specified attribute is expected
+        to exist for the data variable "var_name" and exception is raised if
+        it does not.
         """
         if var_name in ds and attr_name in ds[var_name].attrs:
             value = ds[var_name].attrs[attr_name]
             # print(f"Read value for {var_name}.{attr_name}: {value}")
 
-            if len(value) == 1:
+            # Check if type has "length"
+            if hasattr(type(value), '__len__') and len(value) == 1:
                 value = value[0]
 
             if to_date is True:
                 try:
-                    if len(value) == 8:
+                    tokens = value.split('T')
+                    if len(tokens) == 3:
+                        # Handle malformed datetime in Sentinel 2 granules:
+                        # img_pair_info.acquisition_date_img1 = "20190215T205541T00:00:00"
+                        value = tokens[0] + 'T' + tokens[1][0:2] + ':' + tokens[1][2:4]+ ':' + tokens[1][4:6]
+                        value = datetime.strptime(value, '%Y%m%dT%H:%M:%S')
+
+                    elif len(value) == 8:
                         # Only date is provided
                         value = datetime.strptime(value[0:8], '%Y%m%d')
 
@@ -789,14 +831,14 @@ class ITSCube:
                         value = datetime.strptime(value, '%Y%m%dT%H:%M:%S')
 
                 except ValueError as exc:
-                    raise RuntimeError(f"Error converting {value} to date format '%Y%m%d': {exc}")
+                    raise RuntimeError(f"Error converting {value} to date format '%Y%m%d': {exc} for {var_name}.{attr_name} in {ds_url}")
 
             # print(f"Return value for {var_name}.{attr_name}: {value}")
             return value
 
         if missing_value is None:
             # If missing_value is not provided, attribute is expected to exist always
-            raise RuntimeError(f"{attr_name} is expected within {var_name} for {ds}")
+            raise RuntimeError(f"{attr_name} is expected within {var_name} for {ds_url}")
 
         return missing_value
 
@@ -820,8 +862,8 @@ class ITSCube:
                     processing: no track of inputs for each task, but have output
                     available for each task).
         """
-        # Try to load the whole dataset into memory to avoid penalty for random read access
-        # when accessing S3 bucket (?)
+        # Tried to load the whole dataset into memory to avoid penalty for random read access
+        # when accessing S3 bucket (?) - does not make any difference.
         # ds.load()
 
         # Flag if layer data is empty
@@ -833,8 +875,20 @@ class ITSCube:
         # Layer middle date
         mid_date = None
 
+        # Detect projection
+        ds_projection = None
+        if DataVars.UTM_PROJECTION in ds:
+            ds_projection = ds.UTM_Projection.spatial_epsg
+
+        elif DataVars.POLAR_STEREOGRAPHIC in ds:
+            ds_projection = ds.Polar_Stereographic.spatial_epsg
+
+        else:
+            # Unknown type of granule is provided
+            raise RuntimeError("Unsupported projection is detected for {ds_url}. One of [{ITSCube.UTM_PROJECTION}, {ITSCube.POLAR_STEREOGRAPHIC}] is supported.")
+
         # Consider granules with data only within target projection
-        if str(int(ds.UTM_Projection.spatial_epsg)) == self.projection:
+        if str(int(ds_projection)) == self.projection:
             mid_date = datetime.strptime(ds.img_pair_info.date_center, '%Y%m%d')
 
             # Add date separation in days as milliseconds for the middle date
@@ -852,9 +906,10 @@ class ITSCube:
                 empty = True
 
             else:
-                mask_data = ds.where(mask, drop=True)
+                mask_data = ds.where(mask_lon & mask_lat, drop=True)
 
-                # Another way to filter:
+                # Another way to filter (have to put min/max values in the order
+                # corresponding to the grid)
                 # cube_v = ds.v.sel(x=slice(self.x.min, self.x.max),y=slice(self.y.max, self.y.min)).copy()
 
                 # If it's a valid velocity layer, add it to the cube.
@@ -869,8 +924,7 @@ class ITSCube:
 
         # Have to return URL for the dataset, which is provided as an input to the method,
         # to track URL per granule in parallel processing
-        return empty, int(ds.UTM_Projection.spatial_epsg), mid_date, ds_url, \
-            mask_data
+        return empty, int(ds_projection), mid_date, ds_url, mask_data
 
     def process_v_attributes(self, var_name: str, is_first_write: bool, mid_date_coord):
         """
@@ -912,8 +966,9 @@ class ITSCube:
         error_data = None
         if var_name in _stable_rmse_vars:
             error_data = [
-                ITSCube.get_data_var_attr(ds, var_name, error_name, DataVars.MISSING_VALUE) if error_name in ds[var_name].attrs else
-                ITSCube.get_data_var_attr(ds, var_name, DataVars.STABLE_RMSE, DataVars.MISSING_VALUE) for ds in self.ds
+                ITSCube.get_data_var_attr(ds, url, var_name, error_name, DataVars.MISSING_VALUE) if error_name in ds[var_name].attrs else
+                ITSCube.get_data_var_attr(ds, url, var_name, DataVars.STABLE_RMSE, DataVars.MISSING_VALUE)
+                for ds, url in zip(self.ds, self.urls)
             ]
 
             # If attribute is propagated as cube's data var attribute, delete it
@@ -921,7 +976,8 @@ class ITSCube:
                 del self.layers[var_name].attrs[DataVars.STABLE_RMSE]
 
         else:
-            error_data = [ITSCube.get_data_var_attr(ds, var_name, error_name, DataVars.MISSING_VALUE) for ds in self.ds]
+            error_data = [ITSCube.get_data_var_attr(ds, url, var_name, error_name, DataVars.MISSING_VALUE)
+                          for ds, url in zip(self.ds, self.urls)]
 
         self.layers[error_name] = xr.DataArray(
             data=error_data,
@@ -941,7 +997,8 @@ class ITSCube:
         # This attribute appears for all v* data variables, capture it only once
         if DataVars.STABLE_COUNT not in self.layers:
             self.layers[DataVars.STABLE_COUNT] = xr.DataArray(
-                data=[ITSCube.get_data_var_attr(ds, var_name, DataVars.STABLE_COUNT) for ds in self.ds],
+                data=[ITSCube.get_data_var_attr(ds, url, var_name, DataVars.STABLE_COUNT)
+                      for ds, url in zip(self.ds, self.urls)],
                 coords=[mid_date_coord],
                 dims=[Coords.MID_DATE]
             )
@@ -954,7 +1011,8 @@ class ITSCube:
         if DataVars.FLAG_STABLE_SHIFT not in self.layers:
             missing_stable_shift_value = 0.0
             self.layers[DataVars.FLAG_STABLE_SHIFT] = xr.DataArray(
-                data=[ITSCube.get_data_var_attr(ds, var_name, DataVars.FLAG_STABLE_SHIFT, missing_stable_shift_value) for ds in self.ds],
+                data=[ITSCube.get_data_var_attr(ds, url, var_name, DataVars.FLAG_STABLE_SHIFT, missing_stable_shift_value)
+                      for ds, url in zip(self.ds, self.urls)],
                 coords=[mid_date_coord],
                 dims=[Coords.MID_DATE]
             )
@@ -965,7 +1023,8 @@ class ITSCube:
         # for example, 'vx_stable_shift' for 'vx' data variable
         shift_var_name = _name_sep.join([var_name, DataVars.STABLE_SHIFT])
         self.layers[shift_var_name] = xr.DataArray(
-            data=[ITSCube.get_data_var_attr(ds, var_name, DataVars.STABLE_SHIFT, DataVars.MISSING_VALUE) for ds in self.ds],
+            data=[ITSCube.get_data_var_attr(ds, url, var_name, DataVars.STABLE_SHIFT, DataVars.MISSING_VALUE)
+                  for ds, url in zip(self.ds, self.urls)],
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE]
         )
@@ -986,8 +1045,15 @@ class ITSCube:
 
         # Construct xarray to hold layers by concatenating layer objects along 'mid_date' dimension
         self.logger.info(f'Combine {len(self.urls)} layers to the {output_dir}...')
+        if len(self.ds) == 0:
+            self.logger.info('No layers to combine, continue')
+            return
+
         start_time = timeit.default_timer()
         mid_date_coord = pd.Index(self.dates, name=Coords.MID_DATE)
+
+        # for each in self.ds:
+        #     self.logger.info(f'Layer v: {each.v.values}')
 
         v_layers = xr.concat([each_ds.v for each_ds in self.ds], mid_date_coord)
 
@@ -1051,6 +1117,12 @@ class ITSCube:
         self.layers[DataVars.V].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.V]
         new_v_vars = [DataVars.V]
 
+        # for each in v_layers['mid_date']:
+        #     self.logger.info(f'Concat v: {v_layers.sel(mid_date=each).values}')
+        #
+        # for each in self.layers['mid_date']:
+        #     self.logger.info(f'Cube v: {self.layers.sel(mid_date=each).v.values}')
+
         # Collect 'v' attributes: these repeat for v, vx, vy, keep only one copy
         # per datacube
         self.layers[DataVars.GRID_MAPPING] = xr.DataArray(
@@ -1064,7 +1136,8 @@ class ITSCube:
 
         # Create new data var to store map_scale_corrected v's attribute
         self.layers[DataVars.MAP_SCALE_CORRECTED] = xr.DataArray(
-            data=[ITSCube.get_data_var_attr(ds, DataVars.V, DataVars.MAP_SCALE_CORRECTED, DataVars.MISSING_BYTE) for ds in self.ds],
+            data=[ITSCube.get_data_var_attr(ds, url, DataVars.V, DataVars.MAP_SCALE_CORRECTED, DataVars.MISSING_BYTE)
+                  for ds, url in zip(self.ds, self.urls)],
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE]
         )
@@ -1255,8 +1328,8 @@ class ITSCube:
             # (only selected ones)
             self.layers[each] = xr.DataArray(
                 data=[ITSCube.get_data_var_attr(
-                    ds, DataVars.ImgPairInfo.NAME, each, to_date=DataVars.ImgPairInfo.CONVERT_TO_DATE[each]
-                ) for ds in self.ds],
+                    ds, url, DataVars.ImgPairInfo.NAME, each, to_date=DataVars.ImgPairInfo.CONVERT_TO_DATE[each]
+                ) for ds, url in zip(self.ds, self.urls)],
                 coords=[mid_date_coord],
                 dims=[Coords.MID_DATE],
                 attrs={
@@ -1274,11 +1347,11 @@ class ITSCube:
         self.layers[var_name] = xr.DataArray(
             data=[
                 ITSCube.get_data_var_attr(
-                    ds, DataVars.ImgPairInfo.NAME, var_name, to_date = True
+                    ds, url, DataVars.ImgPairInfo.NAME, var_name, to_date = True
                 ) if var_name in ds[DataVars.ImgPairInfo.NAME].attrs else
                 ITSCube.get_data_var_attr(
-                    ds, DataVars.ImgPairInfo.NAME, DataVars.ImgPairInfo.AQUISITION_DATE_IMG1, to_date = True
-                ) for ds in self.ds],
+                    ds, url, DataVars.ImgPairInfo.NAME, DataVars.ImgPairInfo.AQUISITION_DATE_IMG1, to_date = True
+                ) for ds, url in zip(self.ds, self.urls)],
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE],
             attrs={
@@ -1291,11 +1364,11 @@ class ITSCube:
         self.layers[var_name] = xr.DataArray(
             data=[
                 ITSCube.get_data_var_attr(
-                    ds, DataVars.ImgPairInfo.NAME, var_name,  to_date = True
+                    ds, url, DataVars.ImgPairInfo.NAME, var_name, to_date = True
                 ) if var_name in ds[DataVars.ImgPairInfo.NAME].attrs else
                 ITSCube.get_data_var_attr(
-                    ds, DataVars.ImgPairInfo.NAME, DataVars.ImgPairInfo.AQUISITION_DATE_IMG2, to_date = True
-                ) for ds in self.ds],
+                    ds, url, DataVars.ImgPairInfo.NAME, DataVars.ImgPairInfo.AQUISITION_DATE_IMG2, to_date = True
+                ) for ds, url in zip(self.ds, self.urls)],
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE],
             attrs={
@@ -1322,12 +1395,17 @@ class ITSCube:
             }
             for each in new_v_vars:
                 encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}
+                # encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: -32767, 'dtype': 'short'}
 
                 # Set missing_value only on first write to the disk store, otherwise
                 # will get "ValueError: failed to prevent overwriting existing key
                 # missing_value in attrs."
                 if DataVars.MISSING_VALUE_ATTR not in self.layers[each].attrs:
                     self.layers[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
+
+            # Explicitly set type
+            encoding_settings['v'] = {DataVars.FILL_VALUE_ATTR: -32767, 'dtype': 'short'}
+
             # Set units for all datetime objects
             for each in [DataVars.ImgPairInfo.ACQUISITION_IMG1, DataVars.ImgPairInfo.ACQUISITION_IMG2,
                 DataVars.ImgPairInfo.DATE_CENTER, Coords.MID_DATE]:
@@ -1360,12 +1438,35 @@ class ITSCube:
         # Total number of skipped granules due to wrong projection
         sum_projs = sum([len(each) for each in self.skipped_proj_granules.values()])
 
+        all_projs = []
+        for each in self.skipped_proj_granules.values():
+            all_projs.extend(each)
+
         print("Skipped granules:")
         print(f"      empty data       : {len(self.skipped_empty_granules)} ({100.0 * len(self.skipped_empty_granules)/num_urls}%)")
         print(f"      wrong projection : {sum_projs} ({100.0 * sum_projs/num_urls}%)")
         print(f"      double mid_date  : {len(self.skipped_double_granules)} ({100.0 * len(self.skipped_double_granules)/num_urls}%)")
         if len(self.skipped_proj_granules):
             print(f"      wrong projections: {sorted(self.skipped_proj_granules.keys())}")
+
+        self.logger.info(f"Writing skipped granule informaton to {ITSCube.GRANULE_REPORT_DIR}")
+
+        # Write skipped granules due to double middle date to the file
+        with open(os.path.join(ITSCube.GRANULE_REPORT_DIR, 'double_middle_date.txt'), 'w') as fh:
+            fh.write(f"# Skipped granules due to double middle date: {len(self.skipped_double_granules)}\n")
+            fh.write('\n'.join(self.skipped_double_granules))
+
+        # Write skipped granules due to no spacial coverage to the file
+        with open(os.path.join(ITSCube.GRANULE_REPORT_DIR, 'empty_granules.txt'), 'w') as fh:
+            fh.write(f"# Skipped granules due to no data: {len(self.skipped_empty_granules)}\n")
+            fh.write('\n'.join(self.skipped_empty_granules))
+
+        # Write skipped granules due to the wrong projection to the file
+        with open(os.path.join(ITSCube.GRANULE_REPORT_DIR, 'wrong_proj_granules.txt'), 'w') as fh:
+            fh.write(f"# Skipped granules due to wrong projection: {len(all_projs)}\n")
+            fh.write('\n'.join(all_projs))
+
+        self.logger.info(f"Done.")
 
     def read_dataset(self, url: str):
         """
@@ -1415,6 +1516,7 @@ if __name__ == '__main__':
     # allow to run test case from itscube.ipynb in standalone mode
     import argparse
     import warnings
+    import sys
     warnings.filterwarnings('ignore')
 
     # Command-line arguments parser
@@ -1473,7 +1575,7 @@ if __name__ == '__main__':
     # Create cube object
     cube = ITSCube(polygon, projection)
 
-    cube.logger.info("Inputs: %s" %args)
+    cube.logger.info(f"Command: {sys.argv}")
 
     # Parameters for the search granule API
     API_params = {
@@ -1489,7 +1591,7 @@ if __name__ == '__main__':
         cube.logger.info("Processing granules sequentially...")
         if args.localPath:
             # Granules are downloaded locally
-            cube.create_from_local_no_api(args.outputDir, args.localPath)
+            cube.create_from_local_no_api(args.outputDir, args.localPath, args.numberGranules)
 
         else:
             cube.create(API_params, args.outputDir, args.numberGranules)
@@ -1499,7 +1601,7 @@ if __name__ == '__main__':
         cube.logger.info("Processing granules in parallel...")
         if args.localPath:
             # Granules are downloaded locally
-            cube.create_from_local_parallel_no_api(args.outputDir, args.localPath)
+            cube.create_from_local_parallel_no_api(args.outputDir, args.localPath, args.numberGranules)
 
         else:
             cube.create_parallel(API_params, args.outputDir, args.numberGranules)
