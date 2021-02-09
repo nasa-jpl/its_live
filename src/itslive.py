@@ -57,7 +57,7 @@ class itslive_ui:
         display(self.map)
 
     def update_coverages(self):
-        base_url = 'https://staging.itslive-search.apps.nsidc.org/velocities/coverage/'
+        base_url = 'https://nsidc.org/apps/itslive-search/velocities/coverage/'
         params = self.build_params()
         resp = requests.get(base_url, params=params, verify=False)
         self.coverage = resp.json()
@@ -65,7 +65,7 @@ class itslive_ui:
 
     @staticmethod
     def get_granule_urls(params):
-        base_url = 'https://staging.itslive-search.apps.nsidc.org/velocities/urls/'
+        base_url = 'https://nsidc.org/apps/itslive-search/velocities/urls'
         resp = requests.get(base_url, params=params, verify=False)
         return resp.json()
 #         return self.urls
@@ -130,13 +130,13 @@ class itslive_ui:
         # LE07_L1TP_008012_20030417_20170125_01_T1_X_LE07_L1TP_008012_20030401_20170126_01_T1_G0240V01_P095.nc
         filtered_urls = []
         files_by_year = {}
-        
+
         for url in urls:
             coverage = itslive_ui._get_temporal_coverage(url)
-            
+
             if coverage['mid_date'].month in months:
                 year_urls = files_by_year.setdefault(coverage['mid_date'].year, [])
-  
+
                 if len(year_urls) >= max_files_per_year:
                     continue
 
@@ -189,4 +189,3 @@ class itslive_ui:
         proj2 = pyproj.Proj("+init=EPSG:"+proj2)
         # Convert coordinates
         return pyproj.transform(proj1, proj2, lon, lat)
-
