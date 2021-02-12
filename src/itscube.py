@@ -65,9 +65,11 @@ class DataVars:
     STABLE_SHIFT_APPLIED = 'stable_shift_applied' # vx, vy - remove from attributes
     STABLE_APPLY_DATE    = 'stable_apply_date' # vx, vy - remove from attributes
 
-    STD_NAME  = 'standard_name'
-    UNITS     = 'units'
-    M_Y_UNITS = 'm/y'
+    STD_NAME    = 'standard_name'
+    UNITS       = 'units'
+    M_Y_UNITS   = 'm/y'
+    COUNT_UNITS = 'count'
+    BINARY_UNITS = 'binary'
 
     # Original data variables and their attributes per ITS_LIVE granules.
     V = 'v'
@@ -101,7 +103,7 @@ class DataVars:
     VYP              = 'vyp'
 
     # Specific to the datacube
-    URL = 's3_path'
+    URL = 'original_url_path'
 
     # Data variable specific to the epsg code:
     # * Polar_Stereographic when epsg code of 3031 or 3413
@@ -111,8 +113,21 @@ class DataVars:
 
     # Missing values for data variables
     MISSING_BYTE      = 0.0
+    MISSING_UBYTE     = 0.0
     MISSING_VALUE     = -32767.0
     MISSING_POS_VALUE = 32767.0
+
+    NAME = {
+        INTERP_MASK: "interpolated_value_mask",
+        VA: "azimuth_velocity",
+        VP: "projected_velocity",
+        VR: "range_velocity",
+        VXP: "projected_x_velocity",
+        VYP: "projected_y_velocity",
+        V_ERROR: 'velocity_error',
+        VP_ERROR: "projected_velocity_error",
+    }
+
 
     # Description strings for all data variables and some
     # of their attributes.
@@ -131,10 +146,6 @@ class DataVars:
             "range measurements onto an a priori flow vector. Where projected " \
             "errors are larger than those determined from range and azimuth " \
             "measurements, unprojected v estimates are used",
-        VP_ERROR: "velocity magnitude error determined by projecting " \
-            "radar range measurements onto an a priori flow vector. " \
-            "Where projected errors are larger than those determined from range " \
-            "and azimuth measurements, unprojected v_error estimates are used",
         VXP: "x-direction velocity determined by projecting radar " \
             "range measurements onto an a priori flow vector. Where projected " \
             "errors are larger than those determined from range and azimuth " \
@@ -144,6 +155,10 @@ class DataVars:
             "errors are larger than those determined from range and azimuth " \
             "measurements, unprojected vy estimates are used",
         V_ERROR: "velocity magnitude error",
+        VP_ERROR: "velocity magnitude error determined by projecting " \
+            "radar range measurements onto an a priori flow vector. " \
+            "Where projected errors are larger than those determined from range " \
+            "and azimuth measurements, unprojected v_error estimates are used",
         INTERP_MASK: "light interpolation mask",
         CHIP_SIZE_COORDS: "Optical data: chip_size_coordinates = " \
             "'image projection geometry: width = x, height = y'. Radar data: " \
@@ -155,7 +170,7 @@ class DataVars:
             "(stationary or slow-flowing surfaces with velocity < 15 m/yr): " \
             "0 = there is no stable surface available and no correction is applied; " \
             "1 = there are stable surfaces and velocity bias is corrected;",
-        URL: "original granule location in AWS S3 bucket"
+        URL: "original granule URL"
     }
 
     class ImgPairInfo:
@@ -397,24 +412,12 @@ class ITSCube:
         params = copy.deepcopy(api_params)
         params['polygon'] = ",".join([str(each) for each in self.polygon_coords])
 
-        self.logger.info(f"API params: {params}")
+        self.logger.info(f"ITS_LIVE search API params: {params}")
         start_time = timeit.default_timer()
         found_urls = [each['url'] for each in itslive_ui.get_granule_urls(params)]
         total_num = len(found_urls)
         time_delta = timeit.default_timer() - start_time
         self.logger.info(f"Number of found by API granules: {total_num} (took {time_delta} seconds)")
-
-        # A hack to include missing from DB granules for pre-1999 period
-        # (was used to generate MalaspinaGlacierCube_32607.zarr).
-        # url_prefix = 'http://its-live-data.jpl.nasa.gov.s3.amazonaws.com'
-        # url_original = 'its-live-data.jpl.nasa.gov'
-        # file_urls = []
-        # with open('missing_LT05_32607.txt') as fh:
-        #     file_urls=[line.rstrip() for line in fh]
-        #     file_urls=[each.replace(url_original, url_prefix) for each in file_urls]
-        #
-        # self.logger.info(f"Attaching {len(file_urls)} missing granules...")
-        # found_urls.extend(file_urls)
 
         if len(found_urls) == 0:
             raise RuntimeError(f"No granules are found for the search API parameters: {params}")
@@ -436,63 +439,80 @@ class ITSCube:
 
         # Need to remove duplicate granules for the middle date: some granules
         # have newer processing date, keep those.
-        url_mid_dates = []
-        keep_urls = []
+        keep_urls = {}
         self.skipped_double_granules = []
 
         for each_url in tqdm(found_urls, ascii=True, desc='Skipping duplicate granules...'):
             # Extract acquisition and processing dates
-            url_acq_1, url_proc_1, url_acq_2, url_proc_2 = \
-                ITSCube.get_dates_from_filename(each_url)
+            url_acq_1, url_proc_1, path_row_1, url_acq_2, url_proc_2, path_row_2 = \
+                ITSCube.get_tokens_from_filename(each_url)
 
-            day_separation = (url_acq_1 - url_acq_2).days
-            mid_date = url_acq_2 + timedelta(days=day_separation/2, milliseconds=day_separation)
+            # Acquisition time and path/row of both images should be identical
+            granule_id = '_'.join([
+                url_acq_1.strftime(ITSCube.DATE_FORMAT),
+                path_row_1,
+                url_acq_2.strftime(ITSCube.DATE_FORMAT),
+                path_row_2
+            ])
 
             # There is a granule for the mid_date already, check which processing
             # time is newer, keep the one with newer processing date
-            if mid_date in url_mid_dates:
-                index = url_mid_dates.index(mid_date)
-                found_url = keep_urls[index]
+            if granule_id in keep_urls:
+                # Enough to use very first of duplicate granules
+                found_url = keep_urls[granule_id][0]
 
-                found_acq_1, found_proc_1, found_acq_2, found_proc_2 = \
-                    ITSCube.get_dates_from_filename(found_url)
+                found_acq_1, found_proc_1, found_path_row_1, found_acq_2, found_proc_2, found_path_row_2 = \
+                    ITSCube.get_tokens_from_filename(found_url)
 
-                # It is allowed for the same image pair only
-                if url_acq_1 != found_acq_1 or \
-                    url_acq_2 != found_acq_2:
-                    raise RuntimeError(f"Found duplicate granule for {mid_date} that differs in acquisition time: {url_acq_1} != {found_acq_1} or {url_acq_2} != {found_acq_2} ({each_url} vs. {found_url})")
+                # If both granules have identical ID (acq. time + path/row),
+                # keep them both
+                if url_acq_1 == found_acq_1 and \
+                   path_row_1 == found_path_row_1 and \
+                   url_acq_2 == found_acq_2 and \
+                   path_row_2 == found_path_row_2:
+
+                    keep_urls[granule_id].append(each_url)
+                    continue
 
                 if url_proc_1 >= found_proc_1 and \
                    url_proc_2 >= found_proc_2:
                     # Replace the granule with newer processed one
-                    keep_urls[index] = each_url
+                    self.logger.info(f"Skipping {keep_urls[granule_id]} in favor of new {each_url}")
+                    keep_urls[granule_id] = [each_url]
                     self.skipped_double_granules.append(found_url)
 
                 else:
                     # New granule has older processing date, don't include
+                    self.logger.info(f"Skipping new {each_url} in favor of {found_url}")
                     self.skipped_double_granules.append(each_url)
 
             else:
-                # This is new mid_date, append information
-                url_mid_dates.append(mid_date)
-                keep_urls.append(each_url)
+                # This is new granule id, append information
+                keep_urls.setdefault(granule_id, []).append(each_url)
 
-        self.logger.info(f"Keeping {len(keep_urls)} unique granules")
-        return keep_urls
+        granules = []
+        for each in keep_urls.values():
+            granules.extend(each)
+
+        self.logger.info(f"Keeping {len(granules)} unique granules")
+
+        return granules
 
     @staticmethod
-    def get_dates_from_filename(filename):
+    def get_tokens_from_filename(filename):
         """
-        Extract acquisition and processing dates for two images from the filename.
+        Extract acquisition/processing dates and path/row for two images from the filename.
         """
         # Get acquisition and processing date for both images from url and index_url
         url_tokens = os.path.basename(filename).split('_')
         url_acq_date_1 = datetime.strptime(url_tokens[3], ITSCube.DATE_FORMAT)
         url_proc_date_1 = datetime.strptime(url_tokens[4], ITSCube.DATE_FORMAT)
+        url_path_row_1 = url_tokens[2]
         url_acq_date_2 = datetime.strptime(url_tokens[11], ITSCube.DATE_FORMAT)
         url_proc_date_2 = datetime.strptime(url_tokens[12], ITSCube.DATE_FORMAT)
+        url_path_row_2 = url_tokens[10]
 
-        return url_acq_date_1, url_proc_date_1, url_acq_date_2, url_proc_date_2
+        return url_acq_date_1, url_proc_date_1, url_path_row_1, url_acq_date_2, url_proc_date_2, url_path_row_2
 
     def add_layer(self, is_empty, layer_projection, mid_date, url, data):
         """
@@ -571,7 +591,7 @@ class ITSCube:
 
             with s3.open(s3_path, mode='rb') as fhandle:
                 with xr.open_dataset(fhandle, engine=ITSCube.NC_ENGINE) as ds:
-                    results = self.preprocess_dataset(ds, s3_path)
+                    results = self.preprocess_dataset(ds, each_url)
                     self.add_layer(*results)
 
                     # Check if need to write to the file accumulated number of granules
@@ -666,7 +686,6 @@ class ITSCube:
             num_to_process -= num_tasks
             start += num_tasks
 
-        self.format_stats()
         return found_urls
 
     @staticmethod
@@ -783,10 +802,14 @@ class ITSCube:
 
         # Create empty array as it is not provided in the granule,
         # use the same coordinates as for any cube's data variables.
-        # ATTN: This assumes that self.layers already contains 'v' data variable.
+        # ATTN: Can't use None as data to create xr.DataArray - won't be able
+        # to set dtype='short' in encoding for writing to the file.
+        data_values = np.empty((len(self.grid_y), len(self.grid_x)))
+        data_values[:, :] = np.nan
+
         return xr.DataArray(
-            data=None,
-            coords=[self.layers.v.coords[Coords.Y], self.layers.v.coords[Coords.X]],
+            data=data_values,
+            coords=[self.grid_y, self.grid_x],
             dims=[Coords.Y, Coords.X]
         )
 
@@ -926,7 +949,7 @@ class ITSCube:
         # to track URL per granule in parallel processing
         return empty, int(ds_projection), mid_date, ds_url, mask_data
 
-    def process_v_attributes(self, var_name: str, is_first_write: bool, mid_date_coord):
+    def process_v_attributes(self, var_name: str, mid_date_coord):
         """
         Helper method to clean up attributes for v-related data variables.
         """
@@ -950,8 +973,6 @@ class ITSCube:
 
         # If attribute is propagated as cube's data var attribute, delete it.
         # These attributes were collected based on 'v' data variable
-        if DataVars.GRID_MAPPING in self.layers[var_name].attrs:
-            del self.layers[var_name].attrs[DataVars.GRID_MAPPING]
         if DataVars.MAP_SCALE_CORRECTED in self.layers[var_name].attrs:
             del self.layers[var_name].attrs[DataVars.MAP_SCALE_CORRECTED]
         if DataVars.STABLE_SHIFT_APPLIED in self.layers[var_name].attrs:
@@ -1000,8 +1021,14 @@ class ITSCube:
                 data=[ITSCube.get_data_var_attr(ds, url, var_name, DataVars.STABLE_COUNT)
                       for ds, url in zip(self.ds, self.urls)],
                 coords=[mid_date_coord],
-                dims=[Coords.MID_DATE]
-            )
+                dims=[Coords.MID_DATE],
+                attrs={
+                    DataVars.UNITS: DataVars.COUNT_UNITS,
+                    DataVars.STD_NAME: 'stable_count',
+                    DataVars.DESCRIPTION_ATTR: f'number of stable points used to determine {var_name} shift'
+            }
+        )
+
         if DataVars.STABLE_COUNT in self.layers[var_name].attrs:
             del self.layers[var_name].attrs[DataVars.STABLE_COUNT]
 
@@ -1014,20 +1041,28 @@ class ITSCube:
                 data=[ITSCube.get_data_var_attr(ds, url, var_name, DataVars.FLAG_STABLE_SHIFT, missing_stable_shift_value)
                       for ds, url in zip(self.ds, self.urls)],
                 coords=[mid_date_coord],
-                dims=[Coords.MID_DATE]
+                dims=[Coords.MID_DATE],
+                attrs={
+                    DataVars.STD_NAME: DataVars.FLAG_STABLE_SHIFT,
+                    DataVars.FLAG_STABLE_SHIFT_MEANINGS: DataVars.DESCRIPTION[DataVars.FLAG_STABLE_SHIFT_MEANINGS]
+                }
             )
-            # Set flag meaning description
-            self.layers[DataVars.FLAG_STABLE_SHIFT].attrs[DataVars.FLAG_STABLE_SHIFT_MEANINGS] = DataVars.DESCRIPTION[DataVars.FLAG_STABLE_SHIFT_MEANINGS]
 
-        # Create data variable specific 'stable_shift' data variable,
+        # Create 'stable_shift' specific to the data variable,
         # for example, 'vx_stable_shift' for 'vx' data variable
         shift_var_name = _name_sep.join([var_name, DataVars.STABLE_SHIFT])
         self.layers[shift_var_name] = xr.DataArray(
             data=[ITSCube.get_data_var_attr(ds, url, var_name, DataVars.STABLE_SHIFT, DataVars.MISSING_VALUE)
                   for ds, url in zip(self.ds, self.urls)],
             coords=[mid_date_coord],
-            dims=[Coords.MID_DATE]
+            dims=[Coords.MID_DATE],
+            attrs={
+                DataVars.UNITS: DataVars.M_Y_UNITS,
+                DataVars.STD_NAME: f'{var_name}_stable_shift',
+                DataVars.DESCRIPTION_ATTR: f'applied {var_name} shift'
+            }
         )
+
         # If attribute is propagated as cube's vx attribute, delete it
         if DataVars.STABLE_SHIFT in self.layers[var_name].attrs:
             del self.layers[var_name].attrs[DataVars.STABLE_SHIFT]
@@ -1035,6 +1070,43 @@ class ITSCube:
         # Return names of new data variables - to be included into "encoding" settings
         # for writing to the file store.
         return [error_name, shift_var_name]
+
+    def set_grid_mapping_attr(self, var_name: str, ds_grid_mapping_value: str):
+        """
+        Check on existence of "grid_mapping" attribute for the variable, set it
+        if not present.
+        """
+        if DataVars.GRID_MAPPING in self.layers[var_name]:
+            # Attribute is already set, nothing to do
+            return
+
+        grid_mapping_values = []
+        for each_ds in self.ds:
+            if var_name in each_ds and DataVars.GRID_MAPPING in each_ds[var_name].attrs:
+                grid_mapping_values.append(each_ds[var_name].attrs[DataVars.GRID_MAPPING])
+
+        # Flag if attribute needs to be set manually
+        set_grid_mapping = False
+        if len(grid_mapping_values) != len(self.ds):
+            # None or some of the granules provide grid_mapping attribute
+            # ("var_name" data variable might be present only in Radar format),
+            # need to set it manually as xr.concat won't preserve the attribute
+            set_grid_mapping = True
+
+        unique_values = list(set(grid_mapping_values))
+        if len(unique_values) > 1:
+            raise RuntimeError(
+                f"Inconsistent '{var_name}.{DataVars.GRID_MAPPING}' values are "
+                "detected for current {len(self.ds)} layers: {unique_values}")
+
+        if len(unique_values) and unique_values[0] != ds_grid_mapping_value:
+            # Make sure the value is the same as previously detected
+            raise RuntimeError(
+                f"Inconsistent '{DataVars.GRID_MAPPING}' value in "
+                "{var_name}: {self.layers[var_name].attrs[DataVars.GRID_MAPPING]} vs. {ds_grid_mapping_value}")
+
+        if set_grid_mapping:
+            self.layers[var_name].attrs[DataVars.GRID_MAPPING] = ds_grid_mapping_value
 
     def combine_layers(self, output_dir, is_first_write=False):
         """
@@ -1112,27 +1184,25 @@ class ITSCube:
         #       Delete each variable after it has been processed to free up the
         #       memory.
 
-        # Process 'v'
+        # Process 'v' (all formats have v variable - its attributes are inherited,
+        # so no need to set them manually)
         self.layers[DataVars.V] = v_layers
         self.layers[DataVars.V].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.V]
         new_v_vars = [DataVars.V]
 
-        # for each in v_layers['mid_date']:
-        #     self.logger.info(f'Concat v: {v_layers.sel(mid_date=each).values}')
-        #
-        # for each in self.layers['mid_date']:
-        #     self.logger.info(f'Cube v: {self.layers.sel(mid_date=each).v.values}')
+        # Make sure grid_mapping attribute has the same value for all layers
+        grid_mapping_values = [ds.v.attrs[DataVars.GRID_MAPPING] for ds in self.ds]
+        unique_values = list(set(grid_mapping_values))
+        if len(unique_values) > 1:
+            raise RuntimeError("Multiple 'grid_mapping' ('v' attribute) values are detected for current {len(self.ds)} layers: {unique_values}")
 
-        # Collect 'v' attributes: these repeat for v, vx, vy, keep only one copy
+        # Remember the value as all 3D data variables need to have this attribute
+        # set with the same value
+        ds_grid_mapping_value = unique_values[0]
+        del grid_mapping_values
+
+        # Collect 'v' attributes: these repeat for v* variables, keep only one copy
         # per datacube
-        self.layers[DataVars.GRID_MAPPING] = xr.DataArray(
-            data=[ds.v.attrs[DataVars.GRID_MAPPING] for ds in self.ds],
-            coords=[mid_date_coord],
-            dims=[Coords.MID_DATE]
-        )
-        # If attribute is propagated as cube's v attribute, delete it
-        if DataVars.GRID_MAPPING in self.layers[DataVars.V].attrs:
-            del self.layers[DataVars.V].attrs[DataVars.GRID_MAPPING]
 
         # Create new data var to store map_scale_corrected v's attribute
         self.layers[DataVars.MAP_SCALE_CORRECTED] = xr.DataArray(
@@ -1141,10 +1211,6 @@ class ITSCube:
             coords=[mid_date_coord],
             dims=[Coords.MID_DATE]
         )
-        if is_first_write:
-            # Set missing_value only on first write to the disk store, otherwise
-            # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
-            self.layers[DataVars.MAP_SCALE_CORRECTED].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
 
         # If attribute is propagated as cube's v attribute, delete it
         if DataVars.MAP_SCALE_CORRECTED in self.layers[DataVars.V].attrs:
@@ -1159,7 +1225,10 @@ class ITSCube:
         self.layers[DataVars.VX] = xr.concat([ds.vx for ds in self.ds], mid_date_coord)
         self.layers[DataVars.VX].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.VX]
         new_v_vars.append(DataVars.VX)
-        new_v_vars.extend(self.process_v_attributes(DataVars.VX, is_first_write, mid_date_coord))
+        new_v_vars.extend(self.process_v_attributes(DataVars.VX, mid_date_coord))
+
+        self.set_grid_mapping_attr(DataVars.VX, ds_grid_mapping_value)
+
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.VX) for ds in self.ds]
         gc.collect()
@@ -1168,7 +1237,9 @@ class ITSCube:
         self.layers[DataVars.VY] = xr.concat([ds.vy for ds in self.ds], mid_date_coord)
         self.layers[DataVars.VY].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.VY]
         new_v_vars.append(DataVars.VY)
-        new_v_vars.extend(self.process_v_attributes(DataVars.VY, is_first_write, mid_date_coord))
+        new_v_vars.extend(self.process_v_attributes(DataVars.VY, mid_date_coord))
+
+        self.set_grid_mapping_attr(DataVars.VY, ds_grid_mapping_value)
 
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.VY) for ds in self.ds]
@@ -1177,8 +1248,13 @@ class ITSCube:
         # Process 'va'
         self.layers[DataVars.VA] = xr.concat([self.get_data_var(ds, DataVars.VA) for ds in self.ds], mid_date_coord)
         self.layers[DataVars.VA].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.VA]
+        self.layers[DataVars.VA].attrs[DataVars.STD_NAME] = DataVars.NAME[DataVars.VA]
+        self.layers[DataVars.VA].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
+
+        self.set_grid_mapping_attr(DataVars.VA, ds_grid_mapping_value)
+
         new_v_vars.append(DataVars.VA)
-        new_v_vars.extend(self.process_v_attributes(DataVars.VA, is_first_write, mid_date_coord))
+        new_v_vars.extend(self.process_v_attributes(DataVars.VA, mid_date_coord))
 
         # Drop data variable as we don't need it anymore - free up memory
         # Drop only from datasets that have it
@@ -1188,8 +1264,13 @@ class ITSCube:
         # Process 'vr'
         self.layers[DataVars.VR] = xr.concat([self.get_data_var(ds, DataVars.VR) for ds in self.ds], mid_date_coord)
         self.layers[DataVars.VR].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.VR]
+        self.layers[DataVars.VR].attrs[DataVars.STD_NAME] = DataVars.NAME[DataVars.VR]
+        self.layers[DataVars.VR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
+
         new_v_vars.append(DataVars.VR)
-        new_v_vars.extend(self.process_v_attributes(DataVars.VR, is_first_write, mid_date_coord))
+        new_v_vars.extend(self.process_v_attributes(DataVars.VR, mid_date_coord))
+
+        self.set_grid_mapping_attr(DataVars.VR, ds_grid_mapping_value)
 
         # Drop data variable as we don't need it anymore - free up memory
         # Drop only from datasets that have it
@@ -1199,8 +1280,13 @@ class ITSCube:
         # Process 'vxp'
         self.layers[DataVars.VXP] = xr.concat([self.get_data_var(ds, DataVars.VXP) for ds in self.ds], mid_date_coord)
         self.layers[DataVars.VXP].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.VXP]
+        self.layers[DataVars.VXP].attrs[DataVars.STD_NAME] = DataVars.NAME[DataVars.VXP]
+        self.layers[DataVars.VXP].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
+
         new_v_vars.append(DataVars.VXP)
-        new_v_vars.extend(self.process_v_attributes(DataVars.VXP, is_first_write, mid_date_coord))
+        new_v_vars.extend(self.process_v_attributes(DataVars.VXP, mid_date_coord))
+
+        self.set_grid_mapping_attr(DataVars.VXP, ds_grid_mapping_value)
 
         # Drop data variable as we don't need it anymore - free up memory
         # Drop only from datasets that have it
@@ -1210,57 +1296,48 @@ class ITSCube:
         # Process 'vyp'
         self.layers[DataVars.VYP] = xr.concat([self.get_data_var(ds, DataVars.VYP) for ds in self.ds], mid_date_coord)
         self.layers[DataVars.VYP].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.VYP]
+        self.layers[DataVars.VYP].attrs[DataVars.STD_NAME] = DataVars.NAME[DataVars.VYP]
+        self.layers[DataVars.VYP].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
+
         new_v_vars.append(DataVars.VYP)
-        new_v_vars.extend(self.process_v_attributes(DataVars.VYP, is_first_write, mid_date_coord))
+        new_v_vars.extend(self.process_v_attributes(DataVars.VYP, mid_date_coord))
+
+        self.set_grid_mapping_attr(DataVars.VYP, ds_grid_mapping_value)
 
         # Drop data variable as we don't need it anymore - free up memory
         # Drop only from datasets that have it
         self.ds = [ds.drop_vars(DataVars.VYP) if DataVars.VYP in ds else ds for ds in self.ds]
         gc.collect()
 
-        # Process chip_size_height
+        # Process chip_size_height: dtype=ushort
         self.layers[DataVars.CHIP_SIZE_HEIGHT] = xr.concat([ds.chip_size_height for ds in self.ds], mid_date_coord)
-        if is_first_write:
-            self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
-
-        # Collect 'chip_size_height' attributes
         self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.CHIP_SIZE_COORDS] = DataVars.DESCRIPTION[DataVars.CHIP_SIZE_COORDS]
         self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.CHIP_SIZE_HEIGHT]
-        # If attribute is propagated as cube's data attribute, delete it
-        if DataVars.GRID_MAPPING in self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs:
-            del self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.GRID_MAPPING]
+
+        self.set_grid_mapping_attr(DataVars.CHIP_SIZE_HEIGHT, ds_grid_mapping_value)
 
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.CHIP_SIZE_HEIGHT) for ds in self.ds]
         gc.collect()
 
-        # Process chip_size_width
+        # Process chip_size_width: dtype=ushort
         self.layers[DataVars.CHIP_SIZE_WIDTH] = xr.concat([ds.chip_size_width for ds in self.ds], mid_date_coord)
-        if is_first_write:
-            self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
-
-        # Collect  attributes
         self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.CHIP_SIZE_COORDS] = DataVars.DESCRIPTION[DataVars.CHIP_SIZE_COORDS]
         self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.CHIP_SIZE_WIDTH]
-        # If attribute is propagated as cube's data attribute, delete it
-        if DataVars.GRID_MAPPING in self.layers[DataVars.CHIP_SIZE_WIDTH].attrs:
-            del self.layers[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.GRID_MAPPING]
+
+        self.set_grid_mapping_attr(DataVars.CHIP_SIZE_WIDTH, ds_grid_mapping_value)
 
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.CHIP_SIZE_WIDTH) for ds in self.ds]
         gc.collect()
 
-        # Process interp_mask
+        # Process interp_mask: dtype=ubyte
         self.layers[DataVars.INTERP_MASK] = xr.concat([ds.interp_mask for ds in self.ds], mid_date_coord)
         self.layers[DataVars.INTERP_MASK].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.INTERP_MASK]
+        self.layers[DataVars.INTERP_MASK].attrs[DataVars.STD_NAME] = DataVars.NAME[DataVars.INTERP_MASK]
+        self.layers[DataVars.INTERP_MASK].attrs[DataVars.UNITS] = DataVars.BINARY_UNITS
 
-        if is_first_write:
-            self.layers[DataVars.INTERP_MASK].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
-
-        # If attribute is propagated as cube's data attribute, delete it as
-        # it's a data variable on its own.
-        if DataVars.GRID_MAPPING in self.layers[DataVars.INTERP_MASK].attrs:
-            del self.layers[DataVars.INTERP_MASK].attrs[DataVars.GRID_MAPPING]
+        self.set_grid_mapping_attr(DataVars.INTERP_MASK, ds_grid_mapping_value)
 
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.INTERP_MASK) for ds in self.ds]
@@ -1268,17 +1345,12 @@ class ITSCube:
 
         # Process 'v_error'
         self.layers[DataVars.V_ERROR] = xr.concat([self.get_data_var(ds, DataVars.V_ERROR) for ds in self.ds] , mid_date_coord)
+        self.layers[DataVars.V_ERROR].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.V_ERROR]
+        self.layers[DataVars.V_ERROR].attrs[DataVars.STD_NAME] = DataVars.NAME[DataVars.V_ERROR]
+        self.layers[DataVars.V_ERROR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
         new_v_vars.append(DataVars.V_ERROR)
 
-        # Collect 'v_error' attributes
-        # If attribute is propagated as cube's data attribute, delete it as
-        # it's a data variable on its own.
-        if DataVars.GRID_MAPPING in self.layers[DataVars.V_ERROR].attrs:
-            del self.layers[DataVars.V_ERROR].attrs[DataVars.GRID_MAPPING]
-
-        self.layers[DataVars.V_ERROR].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.V_ERROR]
-        self.layers[DataVars.V_ERROR].attrs[DataVars.STD_NAME] = 'velocity_error'
-        self.layers[DataVars.V_ERROR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
+        self.set_grid_mapping_attr(DataVars.V_ERROR, ds_grid_mapping_value)
 
         # Drop data variable as we don't need it anymore - free up memory
         # Drop only from datasets that have it
@@ -1287,17 +1359,12 @@ class ITSCube:
 
         # Process 'vp'
         self.layers[DataVars.VP] = xr.concat([self.get_data_var(ds, DataVars.VP) for ds in self.ds] , mid_date_coord)
+        self.layers[DataVars.VP].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.VP]
+        self.layers[DataVars.VP].attrs[DataVars.STD_NAME] = DataVars.NAME[DataVars.VP]
+        self.layers[DataVars.VP].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
         new_v_vars.append(DataVars.VP)
 
-        # Collect 'vp' attributes
-        # If attribute is propagated as cube's data attribute, delete it as
-        # it's a data variable on its own.
-        if DataVars.GRID_MAPPING in self.layers[DataVars.VP].attrs:
-            del self.layers[DataVars.VP].attrs[DataVars.GRID_MAPPING]
-
-        self.layers[DataVars.VP].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.VP]
-        self.layers[DataVars.VP].attrs[DataVars.STD_NAME] = 'projected_velocity'
-        self.layers[DataVars.VP].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
+        self.set_grid_mapping_attr(DataVars.VP, ds_grid_mapping_value)
 
         # Drop data variable as we don't need it anymore - free up memory
         # Drop only from datasets that have it
@@ -1306,21 +1373,16 @@ class ITSCube:
 
         # Process 'vp_error'
         self.layers[DataVars.VP_ERROR] = xr.concat([self.get_data_var(ds, DataVars.VP_ERROR) for ds in self.ds] , mid_date_coord)
+        self.layers[DataVars.VP_ERROR].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.VP_ERROR]
+        self.layers[DataVars.VP_ERROR].attrs[DataVars.STD_NAME] = DataVars.NAME[DataVars.VP_ERROR]
+        self.layers[DataVars.VP_ERROR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
         new_v_vars.append(DataVars.VP_ERROR)
 
-        # Collect 'vp' attributes
-        # If attribute is propagated as cube's data attribute, delete it as
-        # it's a data variable on its own.
-        if DataVars.GRID_MAPPING in self.layers[DataVars.VP].attrs:
-            del self.layers[DataVars.VP].attrs[DataVars.GRID_MAPPING]
-
-        self.layers[DataVars.VP_ERROR].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.VP_ERROR]
-        self.layers[DataVars.VP_ERROR].attrs[DataVars.STD_NAME] = 'projected_velocity_error'
-        self.layers[DataVars.VP_ERROR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
+        self.set_grid_mapping_attr(DataVars.VP_ERROR, ds_grid_mapping_value)
 
         # Drop data variable as we don't need it anymore - free up memory
         # Drop only from datasets that have it
-        self.ds = [ds.drop_vars(DataVars.VP) if DataVars.VP in ds else ds for ds in self.ds]
+        self.ds = [ds.drop_vars(DataVars.VP_ERROR) if DataVars.VP_ERROR in ds else ds for ds in self.ds]
         gc.collect()
 
         for each in DataVars.ImgPairInfo.ALL:
@@ -1357,7 +1419,6 @@ class ITSCube:
             attrs={
                 DataVars.STD_NAME: DataVars.ImgPairInfo.STD_NAME[var_name],
                 DataVars.DESCRIPTION_ATTR: DataVars.ImgPairInfo.DESCRIPTION[var_name],
-                # DataVars.UNITS: DataVars.ImgPairInfo.UNITS[var_name]
             }
         )
         var_name = DataVars.ImgPairInfo.ACQUISITION_IMG2
@@ -1374,7 +1435,6 @@ class ITSCube:
             attrs={
                 DataVars.STD_NAME: DataVars.ImgPairInfo.STD_NAME[var_name],
                 DataVars.DESCRIPTION_ATTR: DataVars.ImgPairInfo.DESCRIPTION[var_name],
-                # DataVars.UNITS: DataVars.ImgPairInfo.UNITS[var_name]
             }
         )
 
@@ -1384,18 +1444,36 @@ class ITSCube:
         start_time = timeit.default_timer()
         # Write to the Zarr store
         if is_first_write:
-            # ATTN: Must set _FillValue attribute for each data variable that has
+            # Set missing_value only on first write to the disk store, otherwise
+            # will get "ValueError: failed to prevent overwriting existing key missing_value in attrs."
+            for each in [DataVars.MAP_SCALE_CORRECTED,
+                         DataVars.CHIP_SIZE_HEIGHT,
+                         DataVars.CHIP_SIZE_WIDTH,
+                         DataVars.INTERP_MASK]:
+                self.layers[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
+
+            # ATTN: Must set '_FillValue' for each data variable that has
             #       its missing_value attribute set
-            encoding_settings = {
-                DataVars.MAP_SCALE_CORRECTED: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
-                DataVars.INTERP_MASK: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
-                DataVars.CHIP_SIZE_HEIGHT: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
-                DataVars.CHIP_SIZE_WIDTH: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE},
-                DataVars.V_ERROR: {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}
-            }
+            encoding_settings = {}
+            for each in [DataVars.MAP_SCALE_CORRECTED,
+                         DataVars.INTERP_MASK,
+                         DataVars.CHIP_SIZE_HEIGHT,
+                         DataVars.CHIP_SIZE_WIDTH,
+                         DataVars.FLAG_STABLE_SHIFT]:
+                encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE}
+
+            # Explicitly set dtype to 'byte' for some data variables
+            for each in [DataVars.CHIP_SIZE_HEIGHT,
+                         DataVars.CHIP_SIZE_WIDTH]:
+                encoding_settings[each]['dtype'] = 'ushort'
+
+            # Explicitly set dtype for some variables
+            encoding_settings[DataVars.MAP_SCALE_CORRECTED]['dtype'] = 'byte'
+            encoding_settings[DataVars.INTERP_MASK]['dtype'] = 'ubyte'
+            encoding_settings[DataVars.FLAG_STABLE_SHIFT]['dtype'] = 'long'
+
             for each in new_v_vars:
                 encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}
-                # encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: -32767, 'dtype': 'short'}
 
                 # Set missing_value only on first write to the disk store, otherwise
                 # will get "ValueError: failed to prevent overwriting existing key
@@ -1403,12 +1481,32 @@ class ITSCube:
                 if DataVars.MISSING_VALUE_ATTR not in self.layers[each].attrs:
                     self.layers[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
 
-            # Explicitly set type
-            encoding_settings['v'] = {DataVars.FILL_VALUE_ATTR: -32767, 'dtype': 'short'}
+            # Explicitly set dtype to 'short' for v* data variables
+            for each in [DataVars.V,
+                         DataVars.VX,
+                         DataVars.VY,
+                         DataVars.VA,
+                         DataVars.VR,
+                         DataVars.VXP,
+                         DataVars.VYP,
+                         DataVars.VP,
+                         DataVars.V_ERROR,
+                         DataVars.VP_ERROR]:
+                encoding_settings[each]['dtype'] = 'short'
+
+            # Explicitly desable _FillValue for some variables
+            for each in [Coords.MID_DATE,
+                         DataVars.STABLE_COUNT,
+                         DataVars.ImgPairInfo.AUTORIFT_SOFTWARE_VERSION,
+                         DataVars.ImgPairInfo.DATE_DT,
+                         DataVars.ImgPairInfo.DATE_CENTER]:
+                encoding_settings.setdefault(each, {}).update({DataVars.FILL_VALUE_ATTR: None})
 
             # Set units for all datetime objects
-            for each in [DataVars.ImgPairInfo.ACQUISITION_IMG1, DataVars.ImgPairInfo.ACQUISITION_IMG2,
-                DataVars.ImgPairInfo.DATE_CENTER, Coords.MID_DATE]:
+            for each in [DataVars.ImgPairInfo.ACQUISITION_IMG1,
+                         DataVars.ImgPairInfo.ACQUISITION_IMG2,
+                         DataVars.ImgPairInfo.DATE_CENTER,
+                         Coords.MID_DATE]:
                 encoding_settings[each] = {DataVars.UNITS: DataVars.ImgPairInfo.DATE_UNITS}
 
             self.logger.info(f"Encoding writing to Zarr: {encoding_settings}")
@@ -1484,7 +1582,7 @@ class ITSCube:
 
         with s3.open(s3_path, mode='rb') as fhandle:
             with xr.open_dataset(fhandle, engine=ITSCube.NC_ENGINE) as ds:
-                return self.preprocess_dataset(ds, s3_path)
+                return self.preprocess_dataset(ds, each_url)
 
     @staticmethod
     def plot(cube, variable, boundaries: tuple = None):
