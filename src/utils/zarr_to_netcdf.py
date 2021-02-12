@@ -22,7 +22,7 @@ if __name__ == '__main__':
                         help="Input Zarr store directory.")
     parser.add_argument('-o', '--output', type=str, required=True,
                         help="NetCDF filename to store data to.")
-    parser.add_argument('-e', '--engine', type=str, required=False, default='netcdf4',
+    parser.add_argument('-e', '--engine', type=str, required=False, default='h5netcdf',
                         help="NetCDF engine to use to store NetCDF data to the file.")
 
     args = parser.parse_args()
@@ -38,36 +38,37 @@ if __name__ == '__main__':
     encoding = {}
 
     encoding = {
-        'map_scale_corrected': {'_FillValue': 0.0},
-        'interp_mask': {'_FillValue': 0.0},
-        'chip_size_height': {'_FillValue': 0.0},
-        'chip_size_width': {'_FillValue': 0.0},
-        'v_error': {'_FillValue': -32767.0},
-        'v': {'_FillValue': -32767.0},
-        'vx': {'_FillValue': -32767.0},
-        'vx_error': {'_FillValue': -32767.0},
-        'vx_stable_shift': {'_FillValue': -32767.0},
-        'vy': {'_FillValue': -32767.0},
-        'vy_error': {'_FillValue': -32767.0},
-        'vy_stable_shift': {'_FillValue': -32767.0},
-        'va': {'_FillValue': -32767.0},
-        'va_error': {'_FillValue': -32767.0},
-        'va_stable_shift': {'_FillValue': -32767.0},
-        'vr': {'_FillValue': -32767.0},
-        'vr_error': {'_FillValue': -32767.0},
-        'vr_stable_shift': {'_FillValue': -32767.0},
-        'vxp': {'_FillValue': -32767.0},
-        'vxp_error': {'_FillValue': -32767.0},
-        'vxp_stable_shift': {'_FillValue': -32767.0},
-        'vyp': {'_FillValue': -32767.0},
-        'vyp_error': {'_FillValue': -32767.0},
-        'vyp_stable_shift': {'_FillValue': -32767.0},
-        'vp': {'_FillValue': -32767.0},
-        'vp_error': {'_FillValue': -32767.0},
-        'acquisition_img1': {'units': 'days since 1970-01-01'},
-        'acquisition_img2': {'units': 'days since 1970-01-01'},
-        'date_center': {'units': 'days since 1970-01-01'},
-        'mid_date': {'units': 'days since 1970-01-01'}
+        'map_scale_corrected': {'_FillValue': 0.0, 'dtype': 'byte'},
+        'interp_mask':         {'_FillValue': 0.0, 'dtype': 'ubyte'},
+        'flag_stable_shift':   {'dtype': 'long'},
+        'chip_size_height':    {'_FillValue': 0.0, 'dtype': 'ushort'},
+        'chip_size_width':     {'_FillValue': 0.0, 'dtype': 'ushort'},
+        'v_error':             {'_FillValue': -32767.0, 'dtype': 'short'},
+        'v':                   {'_FillValue': -32767.0, 'dtype': 'short'},
+        'vx':                  {'_FillValue': -32767.0, 'dtype': 'short'},
+        'vx_error':            {'_FillValue': -32767.0, 'dtype': 'double'},
+        'vx_stable_shift':     {'_FillValue': -32767.0, 'dtype': 'double'},
+        'vy':                  {'_FillValue': -32767.0, 'dtype': 'short'},
+        'vy_error':            {'_FillValue': -32767.0, 'dtype': 'double'},
+        'vy_stable_shift':     {'_FillValue': -32767.0, 'dtype': 'double'},
+        'va':                  {'_FillValue': -32767.0, 'dtype': 'short'},
+        'va_error':            {'_FillValue': -32767.0, 'dtype': 'double'},
+        'va_stable_shift':     {'_FillValue': -32767.0, 'dtype': 'double'},
+        'vr':                  {'_FillValue': -32767.0, 'dtype': 'short'},
+        'vr_error':            {'_FillValue': -32767.0, 'dtype': 'double'},
+        'vr_stable_shift':     {'_FillValue': -32767.0, 'dtype': 'double'},
+        'vxp':                 {'_FillValue': -32767.0, 'dtype': 'short'},
+        'vxp_error':           {'_FillValue': -32767.0, 'dtype': 'double'},
+        'vxp_stable_shift':    {'_FillValue': -32767.0, 'dtype': 'double'},
+        'vyp':                 {'_FillValue': -32767.0, 'dtype': 'short'},
+        'vyp_error':           {'_FillValue': -32767.0, 'dtype': 'double'},
+        'vyp_stable_shift':    {'_FillValue': -32767.0, 'dtype': 'double'},
+        'vp':                  {'_FillValue': -32767.0, 'dtype': 'short'},
+        'vp_error':            {'_FillValue': -32767.0, 'dtype': 'short'},
+        'acquisition_img1':    {'units': 'days since 1970-01-01'},
+        'acquisition_img2':    {'units': 'days since 1970-01-01'},
+        'date_center':         {'units': 'days since 1970-01-01'},
+        'mid_date':            {'units': 'days since 1970-01-01'}
     }
 
     encode_data_vars = (
