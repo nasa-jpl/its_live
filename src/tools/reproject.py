@@ -1,22 +1,55 @@
 """
 Reprojection tool for ITS_LIVE granule data from source to the target projection.
+
+Examples:
+$ python reproject.py -i input_filename -p target_projection -o output_filename
+
+    Reproject "input_filename" into 'target_projection' and output new granule into
+'output_filename'.
 """
 import argparse
+from datetime import datetime
+import gc
 import logging
+import math
 import numpy as np
 from osgeo import osr
 from osgeo import gdal
 import xarray as xr
 
 from grid import Grid, Bounds
+from itscube_types import Coords, DataVars
 
 
 # Set up logging
 logging.basicConfig(
-    level = logging.INFO,
-    format = '%(asctime)s - %(levelname)s - %(message)s',
-    datefmt = '%Y-%m-%d %H:%M:%S'
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
+
+
+__spatial_ref_3031 = "PROJCS[\"WGS 84 / Antarctic Polar Stereographic\"," \
+    "GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\"," \
+    "6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]]," \
+    "AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0," \
+    "AUTHORITY[\"EPSG\",\"8901\"]],UNIT[“degree\",0.0174532925199433," \
+    "AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"4326\"]]," \
+    "PROJECTION[\"Polar_Stereographic\"],PARAMETER[\"latitude_of_origin\",-71]," \
+    "PARAMETER[\"central_meridian\",0],PARAMETER[\"false_easting\",0]," \
+    "PARAMETER[\"false_northing\",0],UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]]" \
+    ",AXIS[\"Easting\",NORTH],AXIS[\"Northing\",NORTH],AUTHORITY[\"EPSG\",\"3031\"]]"
+
+__spatial_ref_3413 = "PROJCS[\"WGS 84 / NSIDC Sea Ice Polar Stereographic North\"," \
+    "\"GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563," \
+    "AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]]" \
+    ",PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]]," \
+    "UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]]," \
+    "AUTHORITY[\"EPSG\",\"4326\"]],PROJECTION[\"Polar_Stereographic\"]," \
+    "PARAMETER[\"latitude_of_origin\",70],PARAMETER[\"central_meridian\",-45]," \
+    "PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0]," \
+    "UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]],AXIS[\"Easting\",SOUTH]," \
+    "AXIS[\"Northing\",SOUTH],AUTHORITY[\"EPSG\",\"3413\"]]"
 
 
 class ItsLiveReproject:
@@ -61,6 +94,10 @@ class ItsLiveReproject:
         # Input and output projections
         self.ij_epsg = int(self.ds.UTM_Projection.spatial_epsg)
         self.xy_epsg = output_projection
+
+        if self.ij_epsg == self.xy_epsg:
+            raise RuntimeError("Nothing to do as original data is in the target {self.xy_epsg} projection.")
+
         self.logger.info(f"Reprojecting from {self.ij_epsg} to {self.xy_epsg}")
 
         # Image related parameters
@@ -124,7 +161,8 @@ class ItsLiveReproject:
         """
         Run reprojection of ITS_LIVE granule into target projection.
 
-        This methods warps X and Y components of v and vp velocities.
+        This methods warps X and Y components of v and vp velocities, and
+        adjusts them by rotation for new projection.
         """
         self.create_transformation_matrix()
 
@@ -138,18 +176,272 @@ class ItsLiveReproject:
             srcSRS=f'EPSG:{self.ij_epsg}',
             dstSRS=f'EPSG:{self.xy_epsg}'
         )
-        dataset = gdal.Open(f'NETCDF:"{self.input_file}":vx')
+
+        # Compute new vx, vy and v
+        vx, vy, v = self.reproject_velocity(DataVars.VX, DataVars.VY, warp_options)
+
+        # Create new granule in target projection
+        reproject_ds = xr.Dataset(
+            data_vars={
+                DataVars.VX: xr.DataArray(
+                    data=vx.transpose(),
+                    coords=[self.y0_grid, self.x0_grid],
+                    dims=[Coords.Y, Coords.X],
+                    attrs=self.ds[DataVars.VX].attrs),
+                DataVars.VY: xr.DataArray(
+                    data=vy.transpose(),
+                    coords=[self.y0_grid, self.x0_grid],
+                    dims=[Coords.Y, Coords.X],
+                    attrs=self.ds[DataVars.VY].attrs),
+                DataVars.V: xr.DataArray(
+                    data=v.transpose(),
+                    coords=[self.y0_grid, self.x0_grid],
+                    dims=[Coords.Y, Coords.X],
+                    attrs=self.ds[DataVars.V].attrs),
+            },
+            coords={
+                Coords.X: self.x0_grid,
+                Coords.Y: self.y0_grid
+            },
+            attrs=self.ds.attrs
+        )
+
+        # Use garbage collection
+        vx = None
+        vy = None
+        v = None
+        gc.collect()
+
+        # Set reprojection information
+        reproject_ds.attrs['date_reprojected'] = datetime.now().strftime('%d-%m-%Y %H:%M:%S')
+        reproject_ds.attrs['reprojected_from'] = self.input_file
+
+        # Add projection data variable
+        proj_data = None
+        proj_name = DataVars.POLAR_STEREOGRAPHIC
+        if self.xy_epsg == 3031:
+            proj_data = xr.DataArray(
+                data='',
+                coords={},
+                dims=[],
+                attrs={
+                    DataVars.GRID_MAPPING: 'polar_stereographic',
+                    'straight_vertical_longitude_from_pole': 0,
+                    'latitude_of_projection_origin': -90.0,
+                    'latitude_of_origin': -71.0,
+                    'scale_factor_at_projection_origin': 1,
+                    'false_easting': 0.0,
+                    'false_northing': 0.0,
+                    'semi_major_axis': 6378.137,
+                    'semi_minor_axis': 6356.752,
+                    'inverse_flattening': 298.257223563,
+                    'spatial_ref': __spatial_ref_3031,
+                    'spatial_proj4': "+proj=stere +lat_0=-90 +lat_ts=-71 +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+                }
+            )
+
+        elif self.xy_epsg == 3413:
+            proj_data = xr.DataArray(
+                data='',
+                coords={},
+                dims=[],
+                attrs={
+                    DataVars.GRID_MAPPING: 'polar_stereographic',
+                    'straight_vertical_longitude_from_pole': -45,
+                    'latitude_of_projection_origin': 90.0,
+                    'latitude_of_origin': 70.0,
+                    'scale_factor_at_projection_origin': 1,
+                    'false_easting': 0.0,
+                    'false_northing': 0.0,
+                    'semi_major_axis': 6378.137,
+                    'semi_minor_axis': 6356.752,
+                    'inverse_flattening': 298.257223563,
+                    'spatial_ref': __spatial_ref_3413,
+                    'spatial_proj4': "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+                }
+            )
+
+        else:
+            proj_name = DataVars.UTM_PROJECTION
+            zone, spacial_ref_value = self.spatial_ref_32x()
+            proj_data = xr.DataArray(
+                data='',
+                coords={},
+                dims=[],
+                attrs={
+                    DataVars.GRID_MAPPING: 'universal_transverse_mercator',
+                    'utm_zone_number': zone,
+                    'semi_major_axis': 6378137,
+                    'inverse_flattening': 298.257223563,
+                    'CoordinateTransformType': 'Projection',
+                    'CoordinateAxisTypes': 'GeoX GeoY',
+                    'spatial_ref': spacial_ref_value,
+                    'spatial_proj4': "+proj=utm +zone=28 +datum=WGS84 +units=m +no_defs"
+                }
+            )
+
+        proj_data.attrs['spatial_epsg'] = self.xy_epsg
+        # Format GeoTransform:
+        # x top left (cell left most boundary), grid size, 0, y top left (cell upper most boundary), 0, -grid size
+        half_x_cell = self.XSize/2.0
+        half_y_cell = self.YSize/2.0
+        proj_data.attrs['GeoTransform'] = f"{self.x0_grid[0] - half_x_cell} {self.XSize} 0 {self.y0_grid[0] - half_y_cell} 0 {self.YSize}"
+        reproject_ds[proj_name] = proj_data
+
+        # Set grid_mapping for vx, vy:
+        reproject_ds[DataVars.VX].attrs[DataVars.GRID_MAPPING] = proj_name
+        reproject_ds[DataVars.VY].attrs[DataVars.GRID_MAPPING] = proj_name
+
+        if DataVars.VP in self.ds:
+            # This is Radar format, projected velocity is provided
+            vxp, vyp, vp = self.reproject_velocity(DataVars.VXP, DataVars.VYP, warp_options)
+
+            reproject_ds[DataVars.VXP] = xr.DataArray(
+                data=vxp.transpose(),
+                coords=[self.y0_grid, self.x0_grid],
+                dims=[Coords.Y, Coords.X],
+                attrs=self.ds[DataVars.VXP].attrs
+            )
+            reproject_ds[DataVars.VXP].attrs[DataVars.GRID_MAPPING] = proj_name
+
+            reproject_ds[DataVars.VYP] = xr.DataArray(
+                data=vyp.transpose(),
+                coords=[self.y0_grid, self.x0_grid],
+                dims=[Coords.Y, Coords.X],
+                attrs=self.ds[DataVars.VYP].attrs
+            )
+            reproject_ds[DataVars.VYP].attrs[DataVars.GRID_MAPPING] = proj_name
+
+            reproject_ds[DataVars.VP] = xr.DataArray(
+                data=vp.transpose(),
+                coords=[self.y0_grid, self.x0_grid],
+                dims=[Coords.Y, Coords.X],
+                attrs=self.ds[DataVars.VP].attrs
+            )
+
+            vxp = None
+            vyp = None
+            vp = None
+            gc.collect()
+
+            # Process VA
+
+        # Warp data variables that require resampleAlg=gdal.GRA_NearestNeighbour
+        warp_options = gdal.WarpOptions(
+            # format='netCDF',
+            format='vrt',   # Use virtual memory format to avoid writing warped dataset to the file
+            outputBounds=(self.x0_bbox.min, self.y0_bbox.max, self.x0_bbox.max, self.y0_bbox.min),
+            xRes=self.XSize,
+            yRes=self.YSize,
+            srcSRS=f'EPSG:{self.ij_epsg}',
+            dstSRS=f'EPSG:{self.xy_epsg}',
+            resampleAlg=gdal.GRA_NearestNeighbour
+        )
+
+        reproject_ds[DataVars.CHIP_SIZE_HEIGHT] = xr.DataArray(
+            data=self.warp_var(DataVars.CHIP_SIZE_HEIGHT, warp_options).transpose(),
+            coords=[self.y0_grid, self.x0_grid],
+            dims=[Coords.Y, Coords.X],
+            attrs=self.ds[DataVars.CHIP_SIZE_HEIGHT].attrs
+        )
+        reproject_ds[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.GRID_MAPPING] = proj_name
+
+        reproject_ds[DataVars.CHIP_SIZE_WIDTH] = xr.DataArray(
+            data=self.warp_var(DataVars.CHIP_SIZE_WIDTH, warp_options).transpose(),
+            coords=[self.y0_grid, self.x0_grid],
+            dims=[Coords.Y, Coords.X],
+            attrs=self.ds[DataVars.CHIP_SIZE_WIDTH].attrs
+        )
+        reproject_ds[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.GRID_MAPPING] = proj_name
+
+        reproject_ds[DataVars.INTERP_MASK] = xr.DataArray(
+            data=self.warp_var(DataVars.INTERP_MASK, warp_options).transpose(),
+            coords=[self.y0_grid, self.x0_grid],
+            dims=[Coords.Y, Coords.X],
+            attrs=self.ds[DataVars.INTERP_MASK].attrs
+        )
+        reproject_ds[DataVars.INTERP_MASK].attrs[DataVars.GRID_MAPPING] = proj_name
+
+        if output_file is not None:
+            # Output filename is provided, write re-projected data to the file
+            reproject_ds.to_netcdf(output_file, engine="h5netcdf")
+
+    @staticmethod
+    def write_to_netCDF(ds, output_file):
+        """
+        Write dataset to the netCDF format file.
+        """
+        if output_file is None:
+            # Output filename is not provided
+            return
+
+        encoding_settings = {}
+
+        # Set missing_value
+        for each in [DataVars.CHIP_SIZE_HEIGHT,
+                     DataVars.CHIP_SIZE_WIDTH,
+                     DataVars.INTERP_MASK]:
+            ds[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
+            # ATTN: Must set '_FillValue' for each data variable that has
+            #       its missing_value attribute set
+            encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE}
+
+        # Explicitly set dtype to 'byte' for some data variables
+        for each in [DataVars.CHIP_SIZE_HEIGHT,
+                     DataVars.CHIP_SIZE_WIDTH]:
+            encoding_settings[each]['dtype'] = 'ushort'
+
+        # Explicitly set dtype for some variables
+        encoding_settings[DataVars.INTERP_MASK]['dtype'] = 'ubyte'
+
+        for each in [DataVars.V, DataVars.VX, DataVars.VY, DataVars.VA, DataVars.VR,
+            DataVars.VXP, DataVars.VYP, DataVars.VP, DataVars.V_ERROR, DataVars.VP_ERROR]:
+            if each in ds:
+                encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}
+                # Explicitly set dtype to 'short' for v* data variables
+                encoding_settings[each]['dtype'] = 'short'
+
+                # Set missing_value only on first write to the disk store, otherwise
+                # will get "ValueError: failed to prevent overwriting existing key
+                # missing_value in attrs."
+                if DataVars.MISSING_VALUE_ATTR not in ds[each].attrs:
+                    ds[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
+
+        # write re-projected data to the file
+        ds.to_netcdf(output_file, engine="h5netcdf")
+
+    def warp_var(self, var: str, warp_options: gdal.WarpOptions):
+        """
+        Warp variable into new projection.
+        """
+        dataset = gdal.Open(f'NETCDF:"{self.input_file}":{var}')
+
+        # Warp data variable
+        var_ds = gdal.Warp('', dataset, options=warp_options)
+        np_var = var_ds.ReadAsArray()
+        np_var = np_var.transpose()
+        self.logger.info(f"Read with GDAL {var}.shape = {np_var.shape}")
+
+        return np_var
+
+
+    def reproject_velocity(self, vx: str, vy: str, warp_options: gdal.WarpOptions):
+        """
+        Re-project velocity X and Y components and compute velocity magnitude.
+        """
+        dataset = gdal.Open(f'NETCDF:"{self.input_file}":{vx}')
+
         # Warp data variable
         vx_ds = gdal.Warp('', dataset, options=warp_options)
         np_vx = vx_ds.ReadAsArray()
-        self.logger.info(f"Read with GDAL np_vx.shape = {np_vx.shape}")
+        self.logger.info(f"Read with GDAL {vx}.shape = {np_vx.shape}")
         del dataset
 
-        dataset = gdal.Open(f'NETCDF:"{self.input_file}":vy')
+        dataset = gdal.Open(f'NETCDF:"{self.input_file}":{vy}')
         # Warp data variable
         vy_ds = gdal.Warp('', dataset, options=warp_options)
         np_vy = vy_ds.ReadAsArray()
-        self.logger.info(f"Read with GDAL np_vy.shape = {np_vy.shape}")
+        self.logger.info(f"Read with GDAL {vy}.shape = {np_vy.shape}")
 
         # Transpose np_ds as it's in (y, x) order
         np_vx = np_vx.transpose()
@@ -184,14 +476,15 @@ class ItsLiveReproject:
                     vy[x_index, y_index] = ItsLiveReproject.NODATA_VALUE
 
                 else:
-                    # Apply transformation matrix to vx, vy values converted to distance
+                    # Apply transformation matrix to (vx, vy) values converted to distance
                     xy_v = np.matmul(self.transformation_matrix[x_index, y_index], dv)
                     vx[x_index, y_index] = xy_v[0]
                     vy[x_index, y_index] = xy_v[1]
 
                     # Compute v: sqrt(vx^2 + vy^2)
-                    v = np.sqrt(xy_v[0]*xy_v[0] + xy_v[1]*xy_v[1])
+                    v[x_index, y_index] = np.sqrt(xy_v[0]**2 + xy_v[1]**2)
 
+        return (vx, vy, v)
 
     def create_transformation_matrix(self):
         """
@@ -232,8 +525,8 @@ class ItsLiveReproject:
 
         xy0_points = ItsLiveReproject.dims_to_grid(self.x0_grid, self.y0_grid)
         ij0_points = xy_to_ij_transfer.TransformPoints(xy0_points)
-        self.logger.info(f"Len of (x0, y0) points in P_out: {xy0_points.shape}")
-        self.logger.info(f"Len of (i0, j0) points in P_in:  {len(ij0_points)}")
+        # self.logger.info(f"Len of (x0, y0) points in P_out: {xy0_points.shape}")
+        # self.logger.info(f"Len of (i0, j0) points in P_in:  {len(ij0_points)}")
 
         # Calculate x unit vector: add unit length to ij0_points.x
         ij_x_unit = np.array(ij0_points.copy())
@@ -313,6 +606,37 @@ class ItsLiveReproject:
         # Reshape transformation matrix into 2D matrix: (x, y)
         self.transformation_matrix = self.transformation_matrix.reshape((len(self.x0_grid)), len(self.y0_grid))
         self.logger.info(f"Number of points with no transformation matrix: {no_value_counter} out of {len(xy0_points)} points ({no_value_counter/len(xy0_points)*100.0}%)")
+
+    def spatial_ref_32x(self):
+        """
+        Format spatial_ref attribute value for the UTM_Projection.
+        """
+        epsg = math.floor(self.xy_epsg/100)*100
+        zone = self.xy_epsg - epsg
+        hemisphere = None
+        # We only worry about the following EPSG and zone:
+        # 32600 + zone in the northern hemisphere
+        # 32700 + zone in the southern hemisphere
+        if epsg == 32700:
+            hemisphere = 'S'
+
+        elif epsg == 32600:
+            hemisphere = 'N'
+
+        else:
+            raise RuntimeError(f"Unsupported target projection {self.xy_epsg} is provided.")
+
+        return zone, f"PROJCS[\"WGS 84 / UTM zone {zone}{hemisphere}\"," \
+            "GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\"," \
+            "6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]]," \
+            "AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0," \
+            "AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.0174532925199433," \
+            "AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"4326\"]]," \
+            "PROJECTION[\"Transverse_Mercator\"],PARAMETER[\"latitude_of_origin\",0]," \
+            "PARAMETER[\"central_meridian\",-15],PARAMETER[\"scale_factor\",0.9996]," \
+            "PARAMETER[\"false_easting\",500000],PARAMETER[\"false_northing\",0]," \
+            "UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]]," \
+            "AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH],AUTHORITY[\"EPSG\",\"{self.xy_epsg}\"]]"
 
     @staticmethod
     def dims_to_grid(x, y):
