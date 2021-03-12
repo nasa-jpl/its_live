@@ -1,11 +1,11 @@
 """
-Reprojection tool for ITS_LIVE granule data from source to the target projection.
+Reprojection tool for ITS_LIVE granule data to new target projection.
 
 Examples:
 $ python reproject.py -i input_filename -p target_projection -o output_filename
 
     Reproject "input_filename" into 'target_projection' and output new granule into
-'output_filename'.
+'output_filename' in NetCDF format.
 """
 import argparse
 from datetime import datetime
@@ -96,20 +96,13 @@ class ItsLiveReproject:
         self.xy_epsg = output_projection
 
         if self.ij_epsg == self.xy_epsg:
-            raise RuntimeError("Nothing to do as original data is in the target {self.xy_epsg} projection.")
+            raise RuntimeError("Done: original data is in the target {self.xy_epsg} projection already.")
 
         self.logger.info(f"Reprojecting from {self.ij_epsg} to {self.xy_epsg}")
 
-        # Image related parameters
-        self.startingX = self.ds.x.values[0]
-        self.startingY = self.ds.y.values[0]
-
+        # Grid spacing
         self.XSize = self.ds.x.values[1] - self.ds.x.values[0]
         self.YSize = self.ds.y.values[1] - self.ds.y.values[0]
-
-        self.numberOfSamples = len(self.ds.x)
-        self.numberOfLines = len(self.ds.y)
-        self.logger.info(f"Grid in P_in: num_x={self.numberOfSamples} num_y={self.numberOfLines}")
 
         # Compute bounding box in source projection
         self.ij_x_bbox, self.ij_y_bbox = ItsLiveReproject.bounding_box(
@@ -128,8 +121,8 @@ class ItsLiveReproject:
         self.x0_grid = None
         self.y0_grid = None
 
-        # Transformation matrix to rotate warped vx* and vy* values in output
-        # projection
+        # Transformation matrix to rotate warped velocity components (vx* and vy*)
+        # in output projection
         self.transformation_matrix = None
 
     @staticmethod
@@ -137,6 +130,9 @@ class ItsLiveReproject:
         """
         Select bounding box for the dataset.
         """
+        # ATTN: Assuming that X and Y cell dimensions are the same
+        assert np.abs(dx) == np.abs(dy), f"Cell dimensions differ: x={np.abs(dx)} y={np.abs(dy)}"
+
         center_off_X = dx/2
         center_off_Y = dy/2
 
@@ -147,9 +143,6 @@ class ItsLiveReproject:
         # Y coordinate calculations are based on the fact that dy < 0
         ymin = ds.y.values.min() + center_off_Y
         ymax = ds.y.values.max() - center_off_Y
-
-        # ATTN: Assuming that X and Y cell dimensions are the same
-        assert np.abs(dx) == np.abs(dy), f"Cell dimensions differ: x={np.abs(dx)} y={np.abs(dy)}"
 
         return Grid.bounding_box(
             Bounds(min_value=xmin, max_value=xmax),
@@ -174,7 +167,8 @@ class ItsLiveReproject:
             xRes=self.XSize,
             yRes=self.YSize,
             srcSRS=f'EPSG:{self.ij_epsg}',
-            dstSRS=f'EPSG:{self.xy_epsg}'
+            dstSRS=f'EPSG:{self.xy_epsg}',
+            resampleAlg=gdal.GRA_NearestNeighbour
         )
 
         # Compute new vx, vy and v
@@ -184,17 +178,17 @@ class ItsLiveReproject:
         reproject_ds = xr.Dataset(
             data_vars={
                 DataVars.VX: xr.DataArray(
-                    data=vx.transpose(),
+                    data=vx,
                     coords=[self.y0_grid, self.x0_grid],
                     dims=[Coords.Y, Coords.X],
                     attrs=self.ds[DataVars.VX].attrs),
                 DataVars.VY: xr.DataArray(
-                    data=vy.transpose(),
+                    data=vy,
                     coords=[self.y0_grid, self.x0_grid],
                     dims=[Coords.Y, Coords.X],
                     attrs=self.ds[DataVars.VY].attrs),
                 DataVars.V: xr.DataArray(
-                    data=v.transpose(),
+                    data=v,
                     coords=[self.y0_grid, self.x0_grid],
                     dims=[Coords.Y, Coords.X],
                     attrs=self.ds[DataVars.V].attrs),
@@ -297,7 +291,7 @@ class ItsLiveReproject:
             vxp, vyp, vp = self.reproject_velocity(DataVars.VXP, DataVars.VYP, warp_options)
 
             reproject_ds[DataVars.VXP] = xr.DataArray(
-                data=vxp.transpose(),
+                data=vxp,
                 coords=[self.y0_grid, self.x0_grid],
                 dims=[Coords.Y, Coords.X],
                 attrs=self.ds[DataVars.VXP].attrs
@@ -305,7 +299,7 @@ class ItsLiveReproject:
             reproject_ds[DataVars.VXP].attrs[DataVars.GRID_MAPPING] = proj_name
 
             reproject_ds[DataVars.VYP] = xr.DataArray(
-                data=vyp.transpose(),
+                data=vyp,
                 coords=[self.y0_grid, self.x0_grid],
                 dims=[Coords.Y, Coords.X],
                 attrs=self.ds[DataVars.VYP].attrs
@@ -313,7 +307,7 @@ class ItsLiveReproject:
             reproject_ds[DataVars.VYP].attrs[DataVars.GRID_MAPPING] = proj_name
 
             reproject_ds[DataVars.VP] = xr.DataArray(
-                data=vp.transpose(),
+                data=vp,
                 coords=[self.y0_grid, self.x0_grid],
                 dims=[Coords.Y, Coords.X],
                 attrs=self.ds[DataVars.VP].attrs
@@ -325,21 +319,10 @@ class ItsLiveReproject:
             gc.collect()
 
             # Process VA
-
-        # Warp data variables that require resampleAlg=gdal.GRA_NearestNeighbour
-        warp_options = gdal.WarpOptions(
-            # format='netCDF',
-            format='vrt',   # Use virtual memory format to avoid writing warped dataset to the file
-            outputBounds=(self.x0_bbox.min, self.y0_bbox.max, self.x0_bbox.max, self.y0_bbox.min),
-            xRes=self.XSize,
-            yRes=self.YSize,
-            srcSRS=f'EPSG:{self.ij_epsg}',
-            dstSRS=f'EPSG:{self.xy_epsg}',
-            resampleAlg=gdal.GRA_NearestNeighbour
-        )
+            # TODO
 
         reproject_ds[DataVars.CHIP_SIZE_HEIGHT] = xr.DataArray(
-            data=self.warp_var(DataVars.CHIP_SIZE_HEIGHT, warp_options).transpose(),
+            data=self.warp_var(DataVars.CHIP_SIZE_HEIGHT, warp_options),
             coords=[self.y0_grid, self.x0_grid],
             dims=[Coords.Y, Coords.X],
             attrs=self.ds[DataVars.CHIP_SIZE_HEIGHT].attrs
@@ -347,7 +330,7 @@ class ItsLiveReproject:
         reproject_ds[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.GRID_MAPPING] = proj_name
 
         reproject_ds[DataVars.CHIP_SIZE_WIDTH] = xr.DataArray(
-            data=self.warp_var(DataVars.CHIP_SIZE_WIDTH, warp_options).transpose(),
+            data=self.warp_var(DataVars.CHIP_SIZE_WIDTH, warp_options),
             coords=[self.y0_grid, self.x0_grid],
             dims=[Coords.Y, Coords.X],
             attrs=self.ds[DataVars.CHIP_SIZE_WIDTH].attrs
@@ -355,27 +338,26 @@ class ItsLiveReproject:
         reproject_ds[DataVars.CHIP_SIZE_WIDTH].attrs[DataVars.GRID_MAPPING] = proj_name
 
         reproject_ds[DataVars.INTERP_MASK] = xr.DataArray(
-            data=self.warp_var(DataVars.INTERP_MASK, warp_options).transpose(),
+            data=self.warp_var(DataVars.INTERP_MASK, warp_options),
             coords=[self.y0_grid, self.x0_grid],
             dims=[Coords.Y, Coords.X],
             attrs=self.ds[DataVars.INTERP_MASK].attrs
         )
         reproject_ds[DataVars.INTERP_MASK].attrs[DataVars.GRID_MAPPING] = proj_name
 
-        if output_file is not None:
-            # Output filename is provided, write re-projected data to the file
-            reproject_ds.to_netcdf(output_file, engine="h5netcdf")
+        ItsLiveReproject.write_to_netCDF(reproject_ds, output_file)
 
     @staticmethod
-    def write_to_netCDF(ds, output_file):
+    def write_to_netCDF(ds, output_file: str):
         """
         Write dataset to the netCDF format file.
         """
         if output_file is None:
-            # Output filename is not provided
+            # Output filename is not provided, don't write to the file
             return
 
         encoding_settings = {}
+        compression = {"zlib": True, "complevel": 1}
 
         # Set missing_value
         for each in [DataVars.CHIP_SIZE_HEIGHT,
@@ -385,6 +367,7 @@ class ItsLiveReproject:
             # ATTN: Must set '_FillValue' for each data variable that has
             #       its missing_value attribute set
             encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE}
+            encoding_settings[each].update(compression)
 
         # Explicitly set dtype to 'byte' for some data variables
         for each in [DataVars.CHIP_SIZE_HEIGHT,
@@ -397,9 +380,11 @@ class ItsLiveReproject:
         for each in [DataVars.V, DataVars.VX, DataVars.VY, DataVars.VA, DataVars.VR,
             DataVars.VXP, DataVars.VYP, DataVars.VP, DataVars.V_ERROR, DataVars.VP_ERROR]:
             if each in ds:
-                encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE}
-                # Explicitly set dtype to 'short' for v* data variables
-                encoding_settings[each]['dtype'] = 'short'
+                encoding_settings[each] = {
+                    DataVars.FILL_VALUE_ATTR: DataVars.MISSING_VALUE,
+                    'dtype': 'short'
+                }
+                encoding_settings[each].update(compression)
 
                 # Set missing_value only on first write to the disk store, otherwise
                 # will get "ValueError: failed to prevent overwriting existing key
@@ -407,8 +392,10 @@ class ItsLiveReproject:
                 if DataVars.MISSING_VALUE_ATTR not in ds[each].attrs:
                     ds[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_VALUE
 
+        print(f"Using encodings: {encoding_settings}")
+
         # write re-projected data to the file
-        ds.to_netcdf(output_file, engine="h5netcdf")
+        ds.to_netcdf(output_file, engine="h5netcdf", encoding = encoding_settings)
 
     def warp_var(self, var: str, warp_options: gdal.WarpOptions):
         """
@@ -419,7 +406,6 @@ class ItsLiveReproject:
         # Warp data variable
         var_ds = gdal.Warp('', dataset, options=warp_options)
         np_var = var_ds.ReadAsArray()
-        np_var = np_var.transpose()
         self.logger.info(f"Read with GDAL {var}.shape = {np_var.shape}")
 
         return np_var
@@ -444,11 +430,11 @@ class ItsLiveReproject:
         self.logger.info(f"Read with GDAL {vy}.shape = {np_vy.shape}")
 
         # Transpose np_ds as it's in (y, x) order
-        np_vx = np_vx.transpose()
-        np_vy = np_vy.transpose()
-        self.logger.info(f"Transpose np_vx: {np_vx.shape}")
-        self.logger.info(f"Transpose np_vy: {np_vy.shape}")
-
+        # np_vx = np_vx.transpose()
+        # np_vy = np_vy.transpose()
+        # self.logger.info(f"Transpose np_vx: {np_vx.shape}")
+        # self.logger.info(f"Transpose np_vy: {np_vy.shape}")
+        #
         # Convert velocity value to distance (per transformation matrix requirement)
         np_vx *= ItsLiveReproject.TIME_DELTA
         np_vy *= ItsLiveReproject.TIME_DELTA
@@ -457,32 +443,32 @@ class ItsLiveReproject:
         num_x = len(self.x0_grid)
         num_y = len(self.y0_grid)
 
-        vx = np.zeros((num_x, num_y))
-        vy = np.zeros((num_x, num_y))
-        v = np.zeros((num_x, num_y))
+        vx = np.zeros((num_y, num_x))
+        vy = np.zeros((num_y, num_x))
+        v = np.zeros((num_y, num_x))
 
         # Transform each (dx, dy) to (vx, vy) in output projection
-        for x_index in range(num_x):
-            for y_index in range(num_y):
+        for y_index in range(num_y):
+            for x_index in range(num_x):
                 dv = np.array([
-                    np_vx[x_index, y_index],
-                    np_vy[x_index, y_index]
+                    np_vx[y_index, x_index],
+                    np_vy[y_index, x_index]
                 ])
 
-                if np.isscalar(self.transformation_matrix[x_index, y_index]):
+                if np.isscalar(self.transformation_matrix[y_index, x_index]):
                     # There is no transformation matrix available for the point -->
                     # NODATA
-                    vx[x_index, y_index] = ItsLiveReproject.NODATA_VALUE
-                    vy[x_index, y_index] = ItsLiveReproject.NODATA_VALUE
+                    vx[y_index, x_index] = ItsLiveReproject.NODATA_VALUE
+                    vy[y_index, x_index] = ItsLiveReproject.NODATA_VALUE
 
                 else:
                     # Apply transformation matrix to (vx, vy) values converted to distance
-                    xy_v = np.matmul(self.transformation_matrix[x_index, y_index], dv)
-                    vx[x_index, y_index] = xy_v[0]
-                    vy[x_index, y_index] = xy_v[1]
+                    xy_v = np.matmul(self.transformation_matrix[y_index, x_index], dv)
+                    vx[y_index, x_index] = xy_v[0]
+                    vy[y_index, x_index] = xy_v[1]
 
                     # Compute v: sqrt(vx^2 + vy^2)
-                    v[x_index, y_index] = np.sqrt(xy_v[0]**2 + xy_v[1]**2)
+                    v[y_index, x_index] = np.sqrt(xy_v[0]**2 + xy_v[1]**2)
 
         return (vx, vy, v)
 
@@ -535,11 +521,13 @@ class ItsLiveReproject:
         # x1 = [each[0] for each in points_out]
         # y1 = [each[1] for each in points_out]
 
+        num_xy0_points = len(xy0_points)
+
         # Compute X unit vector based on xy0_points, xy_points
         # in output projection
-        xunit_v = np.zeros((len(xy0_points), 3))
+        xunit_v = np.zeros((num_xy0_points, 3))
         # Compute unit vector for each cell of the output grid
-        for index in range(len(xy0_points)):
+        for index in range(num_xy0_points):
             diff = np.array(xy_points[index]) - np.array(xy0_points[index])
             xunit_v[index] = diff / np.linalg.norm(diff)
 
@@ -548,11 +536,11 @@ class ItsLiveReproject:
         ij_y_unit[:, 1] += self.YSize
         xy_points = ij_to_xy_transfer.TransformPoints(ij_y_unit.tolist())
 
-        yunit_v = np.zeros((len(xy0_points), 3))
+        yunit_v = np.zeros((num_xy0_points, 3))
 
         # Compute X unit vector based on xy0_points and xy_points
         # in output projection
-        for index in range(len(xy0_points)):
+        for index in range(num_xy0_points):
             diff = np.array(xy_points[index]) - np.array(xy0_points[index])
             yunit_v[index] = diff / np.linalg.norm(diff)
 
@@ -563,13 +551,13 @@ class ItsLiveReproject:
         normal = np.array([0.0, 0.0, -1.0])
 
         # Compute transformation matrix per cell
-        self.transformation_matrix = np.zeros((len(xy0_points)), dtype=np.object)
+        self.transformation_matrix = np.zeros((num_xy0_points), dtype=np.object)
 
         # Counter of how many points don't have transformation matrix
         no_value_counter = 0
 
         # For each point on the output grid:
-        for each_index in range(len(xy0_points)):
+        for each_index in range(num_xy0_points):
             # Find corresponding point in P_in projection
             ij_point = ij0_points[each_index]
             xunit = xunit_v[each_index]
@@ -604,8 +592,8 @@ class ItsLiveReproject:
                 # self.logger.info(f"Got M: {self.transformation_matrix[each_index].shape}")
 
         # Reshape transformation matrix into 2D matrix: (x, y)
-        self.transformation_matrix = self.transformation_matrix.reshape((len(self.x0_grid)), len(self.y0_grid))
-        self.logger.info(f"Number of points with no transformation matrix: {no_value_counter} out of {len(xy0_points)} points ({no_value_counter/len(xy0_points)*100.0}%)")
+        self.transformation_matrix = self.transformation_matrix.reshape((len(self.y0_grid), len(self.x0_grid)))
+        self.logger.info(f"Number of points with no transformation matrix: {no_value_counter} out of {num_xy0_points} points ({no_value_counter/num_xy0_points*100.0}%)")
 
     def spatial_ref_32x(self):
         """
@@ -641,14 +629,14 @@ class ItsLiveReproject:
     @staticmethod
     def dims_to_grid(x, y):
         """
-        Convert x, y dimensions of the dataset into numpy grid array.
+        Convert x, y dimensions of the dataset into numpy grid array in (y, x) order.
         """
-        # Use z=0 as TransformPoints calls return 3d point coordinates
+        # Use z=0 as osr.CoordinateTransformation.TransformPoints() returns 3d point coordinates
         grid = np.zeros((len(x)*len(y), 3))
 
         num_row = 0
-        for each_x in x:
-            for each_y in y:
+        for each_y in y:
+            for each_x in x:
                 grid[num_row][0] = each_x
                 grid[num_row][1] = each_y
                 num_row += 1
