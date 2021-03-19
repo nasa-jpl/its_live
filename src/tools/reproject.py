@@ -1,5 +1,5 @@
 """
-Reprojection tool for ITS_LIVE granule data to new target projection.
+Reprojection tool for ITS_LIVE granule to new target projection.
 
 Examples:
 $ python reproject.py -i input_filename -p target_projection -o output_filename
@@ -53,6 +53,12 @@ __spatial_ref_3413 = "PROJCS[\"WGS 84 / NSIDC Sea Ice Polar Stereographic North\
     "UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]],AXIS[\"Easting\",SOUTH]," \
     "AXIS[\"Northing\",SOUTH],AUTHORITY[\"EPSG\",\"3413\"]]"
 
+# Mapping of UTM zone to the central meridian
+_epsg_to_central_meridian = {
+    27: -21,
+    28: -15,
+    29: -9
+}
 
 class ItsLiveReproject:
     """
@@ -103,16 +109,11 @@ class ItsLiveReproject:
         self.logger.info(f"Reprojecting from {self.ij_epsg} to {self.xy_epsg}")
 
         # Grid spacing
-        self.XSize = self.ds.x.values[1] - self.ds.x.values[0]
-        self.YSize = self.ds.y.values[1] - self.ds.y.values[0]
+        self.x_size = self.ds.x.values[1] - self.ds.x.values[0]
+        self.y_size = self.ds.y.values[1] - self.ds.y.values[0]
 
-        # Compute bounding box in source projection
-        self.ij_x_bbox, self.ij_y_bbox = ItsLiveReproject.bounding_box(
-            self.ds,
-            self.XSize,
-            self.YSize
-        )
-        self.logger.info(f"P_in bounding box: x: {self.ij_x_bbox} y: {self.ij_y_bbox}")
+        self.i_limits = Bounds(self.ds.x.values)
+        self.j_limits = Bounds(self.ds.y.values)
 
         # Placeholders for:
         # bounding box in output projection
@@ -127,29 +128,29 @@ class ItsLiveReproject:
         # in output projection
         self.transformation_matrix = None
 
-    @staticmethod
-    def bounding_box(ds, dx, dy):
+    def bounding_box(self):
         """
-        Select bounding box for the dataset.
+        Identify bounding box for original dataset.
         """
-        # ATTN: Assuming that X and Y cell dimensions are the same
-        assert np.abs(dx) == np.abs(dy), f"Cell dimensions differ: x={np.abs(dx)} y={np.abs(dy)}"
+        # ATTN: Assuming that X and Y cell spacings are the same
+        assert np.abs(self.x_size) == np.abs(self.y_size), \
+            f"Cell dimensions differ: x={np.abs(self.x_size)} y={np.abs(self.y_size)}"
 
-        center_off_X = dx/2
-        center_off_Y = dy/2
+        center_off_X = self.x_size/2
+        center_off_Y = self.y_size/2
 
         # Compute cell boundaries as ITS_LIVE grid stores x/y for the cell centers
-        xmin = ds.x.values.min() - center_off_X
-        xmax = ds.x.values.max() + center_off_X
+        xmin = self.i_limits.min - center_off_X
+        xmax = self.i_limits.max + center_off_X
 
         # Y coordinate calculations are based on the fact that dy < 0
-        ymin = ds.y.values.min() + center_off_Y
-        ymax = ds.y.values.max() - center_off_Y
+        ymin = self.j_limits.min + center_off_Y
+        ymax = self.j_limits.max - center_off_Y
 
         return Grid.bounding_box(
             Bounds(min_value=xmin, max_value=xmax),
             Bounds(min_value=ymin, max_value=ymax),
-            dx
+            self.x_size
         )
 
     def run(self, output_file: str = None):
@@ -166,8 +167,8 @@ class ItsLiveReproject:
             # format='netCDF',
             format='vrt',   # Use virtual memory format to avoid writing warped dataset to the file
             outputBounds=(self.x0_bbox.min, self.y0_bbox.min, self.x0_bbox.max, self.y0_bbox.max),
-            xRes=self.XSize,
-            yRes=self.YSize,
+            xRes=self.x_size,
+            yRes=self.y_size,
             srcSRS=f'EPSG:{self.ij_epsg}',
             dstSRS=f'EPSG:{self.xy_epsg}',
             # resampleAlg=gdal.GRA_NearestNeighbour
@@ -279,9 +280,9 @@ class ItsLiveReproject:
         proj_data.attrs['spatial_epsg'] = self.xy_epsg
         # Format GeoTransform:
         # x top left (cell left most boundary), grid size, 0, y top left (cell upper most boundary), 0, -grid size
-        half_x_cell = self.XSize/2.0
-        half_y_cell = self.YSize/2.0
-        proj_data.attrs['GeoTransform'] = f"{self.x0_grid[0] - half_x_cell} {self.XSize} 0 {self.y0_grid[0] - half_y_cell} 0 {self.YSize}"
+        half_x_cell = self.x_size/2.0
+        half_y_cell = self.y_size/2.0
+        proj_data.attrs['GeoTransform'] = f"{self.x0_grid[0] - half_x_cell} {self.x_size} 0 {self.y0_grid[0] - half_y_cell} 0 {self.y_size}"
         reproject_ds[proj_name] = proj_data
 
         # Set grid_mapping for vx, vy:
@@ -329,8 +330,8 @@ class ItsLiveReproject:
             # format='netCDF',
             format='vrt',   # Use virtual memory format to avoid writing warped dataset to the file
             outputBounds=(self.x0_bbox.min, self.y0_bbox.min, self.x0_bbox.max, self.y0_bbox.max),
-            xRes=self.XSize,
-            yRes=self.YSize,
+            xRes=self.x_size,
+            yRes=self.y_size,
             srcSRS=f'EPSG:{self.ij_epsg}',
             dstSRS=f'EPSG:{self.xy_epsg}',
             resampleAlg=gdal.GRA_NearestNeighbour
@@ -447,11 +448,11 @@ class ItsLiveReproject:
         # NOTE: displacement values are in pixel units
         original_dtype = np_vx.dtype
 
-        np_vx = np_vx.astype(type(self.XSize))
-        np_vx *= ItsLiveReproject.TIME_DELTA/self.XSize
+        np_vx = np_vx.astype(type(self.x_size))
+        np_vx *= ItsLiveReproject.TIME_DELTA/self.x_size
 
-        np_vy = np_vx.astype(type(self.YSize))
-        np_vy *= ItsLiveReproject.TIME_DELTA/self.YSize
+        np_vy = np_vx.astype(type(self.y_size))
+        np_vy *= ItsLiveReproject.TIME_DELTA/self.y_size
 
         # Number of X and Y points in the output grid
         num_x = len(self.x0_grid)
@@ -475,7 +476,7 @@ class ItsLiveReproject:
                 # There is no transformation matrix available for the point -->
                 # keep it as NODATA
                 if not np.isscalar(self.transformation_matrix[y_index, x_index]):
-                    self.logger.info("y={y_index} x={x_index}: matrix={self.transformation_matrix[y_index, x_index]}")
+                    # self.logger.info(f"y={y_index} x={x_index}: matrix={self.transformation_matrix[y_index, x_index]}")
                     # Apply transformation matrix to (vx, vy) values converted to pixel displacement
                     xy_v = np.matmul(self.transformation_matrix[y_index, x_index], dv)
                     vx[y_index, x_index] = xy_v[0]
@@ -502,20 +503,23 @@ class ItsLiveReproject:
         ij_to_xy_transfer = osr.CoordinateTransformation(input_projection, output_projection)
         xy_to_ij_transfer = osr.CoordinateTransformation(output_projection, input_projection)
 
+        # Compute bounding box in source projection
+        # ij_x_bbox, ij_y_bbox = self.bounding_box()
+        # self.logger.info(f"P_in bounding box: x: {ij_x_bbox} y: {ij_y_bbox}")
         # Re-project bounding box to output projection
         # points_in = np.array([
-        #     [self.ij_x_bbox.min, self.ij_y_bbox.max],
-        #     [self.ij_x_bbox.max, self.ij_y_bbox.max],
-        #     [self.ij_x_bbox.max, self.ij_y_bbox.min],
-        #     [self.ij_x_bbox.min, self.ij_y_bbox.min]
+        #     [ij_x_bbox.min, ij_y_bbox.max],
+        #     [ij_x_bbox.max, ij_y_bbox.max],
+        #     [ij_x_bbox.max, ij_y_bbox.min],
+        #     [ij_x_bbox.min, ij_y_bbox.min]
         # ])
-        # Re-project corner cells of the grid to output projection -->
-        # get
+        # TODO: confirm if should use corner cells or bounding polygon
+        # Re-project corner cells of the grid to output projection
         points_in = np.array([
-            [self.ds.x.values[0], self.ds.y.values[0]],
-            [self.ds.x.values[-1], self.ds.y.values[0]],
-            [self.ds.x.values[-1], self.ds.y.values[-1]],
-            [self.ds.x.values[0], self.ds.y.values[-1]],
+            [self.i_limits.min, self.j_limits.max],
+            [self.i_limits.max, self.j_limits.max],
+            [self.i_limits.max, self.j_limits.min],
+            [self.i_limits.min, self.j_limits.min],
         ])
         points_out = ij_to_xy_transfer.TransformPoints(points_in)
 
@@ -524,29 +528,25 @@ class ItsLiveReproject:
 
         # Get corresponding bounding box in output projection based on edge points of
         # bounding polygon in P_in projection
-        self.x0_bbox, self.y0_bbox = Grid.bounding_box(bbox_out_x, bbox_out_y, self.XSize)
-        self.logger.info(f"P_out bounding box: x: {self.x0_bbox} y: {self.y0_bbox}")
+        self.x0_bbox, self.y0_bbox = Grid.bounding_box(bbox_out_x, bbox_out_y, self.x_size)
+        self.logger.info(f"P_out bounding box:    x: {self.x0_bbox} y: {self.y0_bbox}")
 
         # Output grid will be used as input to the gdal.warp() and to identify
         # corresponding grid cells in original P_in projection when computing
         # transformation matrix
-        self.x0_grid, self.y0_grid = Grid.create(self.x0_bbox, self.y0_bbox, self.XSize)
-        self.logger.info(f"Grid in P_out: num_x={len(self.x0_grid)} num_y={len(self.y0_grid)}")
-        self.logger.info(f"Cell center in P_out: x_min={self.x0_grid[0]} x_max={self.x0_grid[-1]} y_max={self.y0_grid[0]} y_min={self.y0_grid[-1]}")
+        self.x0_grid, self.y0_grid = Grid.create(self.x0_bbox, self.y0_bbox, self.x_size)
+        self.logger.info(f"Grid in P_out:         num_x={len(self.x0_grid)} num_y={len(self.y0_grid)}")
+        self.logger.info(f"Cell centers in P_out: x_min={self.x0_grid[0]} x_max={self.x0_grid[-1]} y_max={self.y0_grid[0]} y_min={self.y0_grid[-1]}")
 
         xy0_points = ItsLiveReproject.dims_to_grid(self.x0_grid, self.y0_grid)
         self.logger.info(f"xy0_points: {xy0_points}")
-        # self.logger.info(f"xy0_points[:-5]: {xy0_points[-5:]}")
 
         ij0_points = xy_to_ij_transfer.TransformPoints(xy0_points)
 
         # Calculate x unit vector: add unit length to ij0_points.x
         ij_x_unit = np.array(ij0_points)
-        self.logger.info(f"Unit: original X: {ij_x_unit[0:10]}")
-        ij_x_unit[:, 0] += self.XSize
-        self.logger.info(f"Unit: X+XSize ({self.XSize}): {ij_x_unit[0:10]}")
+        ij_x_unit[:, 0] += self.x_size
         ij_x_list = ij_x_unit.tolist()
-        self.logger.info(f"Unit: X+XSize list: {ij_x_list[:10]}")
         xy_points = ij_to_xy_transfer.TransformPoints(ij_x_unit.tolist())
 
         num_xy0_points = len(xy0_points)
@@ -561,9 +561,7 @@ class ItsLiveReproject:
 
         # Calculate Y unit vector: add unit length to ij0_points.y
         ij_y_unit = np.array(ij0_points)
-        # self.logger.info(f"Original Y: {ij_y_unit[0:10]}")
-        ij_y_unit[:, 1] += self.YSize
-        # self.logger.info(f"Y+YSize ({self.YSize}): {ij_y_unit[0:10]}")
+        ij_y_unit[:, 1] += self.y_size
         xy_points = ij_to_xy_transfer.TransformPoints(ij_y_unit.tolist())
 
         yunit_v = np.zeros((num_xy0_points, 3))
@@ -573,9 +571,6 @@ class ItsLiveReproject:
         for index in range(num_xy0_points):
             diff = np.array(xy_points[index]) - np.array(xy0_points[index])
             yunit_v[index] = diff / np.linalg.norm(diff)
-
-        print("x_unit[0]: ", xunit_v[0])
-        print("y_unit[0]: ", yunit_v[0])
 
         # Local normal vector
         normal = np.array([0.0, 0.0, 1.0])
@@ -588,22 +583,22 @@ class ItsLiveReproject:
         no_value_counter = 0
 
         # CONTINUE: double check on values
-        scale_factor_x = self.XSize/ItsLiveReproject.TIME_DELTA
-        scale_factor_y = self.YSize/ItsLiveReproject.TIME_DELTA
+        scale_factor_x = self.x_size/ItsLiveReproject.TIME_DELTA
+        scale_factor_y = self.y_size/ItsLiveReproject.TIME_DELTA
 
         # For each point on the output grid:
         for each_index in range(num_xy0_points):
-            # Find corresponding point in P_in projection
+            # Find corresponding point in source P_in projection
             ij_point = ij0_points[each_index]
 
             # Check if the point in P_in projection is within original granule's
             # X/Y range
-            if ij_point[0] < self.ij_x_bbox.min or ij_point[0] > self.ij_x_bbox.max or \
-               ij_point[1] < self.ij_y_bbox.min or ij_point[1] > self.ij_y_bbox.max:
-                # self.transformation_matrix[each_index] = ItsLiveReproject.NODATA_VALUE
+            if ij_point[0] < self.i_limits.min or ij_point[0] > self.i_limits.max or \
+               ij_point[1] < self.j_limits.min or ij_point[1] > self.j_limits.max:
                 no_value_counter += 1
                 continue
 
+            # TODO: Check if there is NODATA_VALUE for the point --> don't compute the matrix
             xunit = xunit_v[each_index]
             yunit = yunit_v[each_index]
 
@@ -665,10 +660,12 @@ class ItsLiveReproject:
             "AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.0174532925199433," \
             "AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"4326\"]]," \
             "PROJECTION[\"Transverse_Mercator\"],PARAMETER[\"latitude_of_origin\",0]," \
-            "PARAMETER[\"central_meridian\",-15],PARAMETER[\"scale_factor\",0.9996]," \
+            f"PARAMETER[\"central_meridian\",{_epsg_to_central_meridian[zone]}]," \
+            "PARAMETER[\"scale_factor\",0.9996]," \
             "PARAMETER[\"false_easting\",500000],PARAMETER[\"false_northing\",0]," \
             "UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]]," \
-            "AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH],AUTHORITY[\"EPSG\",\"{self.xy_epsg}\"]]"
+            "AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH]," \
+            f"AUTHORITY[\"EPSG\",\"{self.xy_epsg}\"]]"
 
     @staticmethod
     def dims_to_grid(x, y):
