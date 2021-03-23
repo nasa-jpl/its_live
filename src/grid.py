@@ -72,7 +72,7 @@ class Grid:
         """
         # Calculate grid bounds
         x0, y0 = Grid.bounding_box(x, y, grid_spacing)
-        print(f"Grid.create: bounding box: x: {x0} y: {y0}" )
+        # print(f"Grid.create: bounding box: x: {x0} y: {y0}" )
 
         # Generate vectors of grid centers
         # Cell center offset
