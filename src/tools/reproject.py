@@ -85,6 +85,11 @@ class ItsLiveReproject:
     # computations.
     TIME_DELTA = 1.0/365.0
 
+    V_ERROR_ATTRS = {
+        DataVars.STD_NAME:         DataVars.NAME[DataVars.V_ERROR],
+        DataVars.DESCRIPTION_ATTR: DataVars.DESCRIPTION[DataVars.V_ERROR],
+        DataVars.UNITS:            DataVars.M_Y_UNITS
+    }
     def __init__(self, data, output_projection: int):
         """
         Initialize object.
@@ -125,6 +130,10 @@ class ItsLiveReproject:
         # grid coordinates in output projection
         self.x0_grid = None
         self.y0_grid = None
+
+        # Indices for original cells that correspond to the re-projected cells:
+        # to find corresponding values
+        self.original_ij_index = None
 
         # Transformation matrix to rotate warped velocity components (vx* and vy*)
         # in output projection
@@ -178,14 +187,47 @@ class ItsLiveReproject:
             resampleAlg=gdal.GRA_NearestNeighbour
         )
 
+        # Check if v_error is present in original data
+        v_error_np = None
+        if DataVars.V_ERROR in self.ds:
+            v_error_np = self.ds[DataVars.V_ERROR].values
+
+        else:
+            # v_error does not exist, compute as
+            # (abs(vx)*stable_rmse_vx + abs(vy)*stable_rmse_vy)/v
+            num_i = len(self.ds.x.values)
+            num_j = len(self.ds.y.values)
+            v_error_np = np.zeros((num_j, num_i))
+            v_error_np.fill(DataVars.MISSING_VALUE)
+
+            v_np = self.ds[DataVars.V].values
+            vx_np = self.ds[DataVars.VX].values
+            vy_np = self.ds[DataVars.VY].values
+
+            vx_stable_rmse = self.ds[DataVars.VX].attrs[DataVars.STABLE_RMSE]
+            vy_stable_rmse = self.ds[DataVars.VY].attrs[DataVars.STABLE_RMSE]
+
+            for j_ind in range(num_j):
+                for i_ind in range(num_i):
+                    if v_np[j_ind, i_ind] != 0:
+                        v_error_np[j_ind, i_ind] = (np.abs(vx_np[j_ind, i_ind])*vx_stable_rmse + \
+                                                    np.abs(vy_np[j_ind, i_ind])*vy_stable_rmse) / v_np[j_ind, i_ind]
+
         # Compute new vx, vy and v
-        vx, vy, v = self.reproject_velocity(DataVars.VX, DataVars.VY, warp_options)
+        vx, vy, v, v_error = self.reproject_velocity(
+            DataVars.VX,
+            DataVars.VY,
+            DataVars.V,
+            v_error_np,
+            warp_options
+        )
 
         # Create new granule in target projection
         ds_coords=[
             (Coords.Y, self.y0_grid, self.ds.y.attrs),
             (Coords.X, self.x0_grid, self.ds.x.attrs)
         ]
+
         reproject_ds = xr.Dataset(
             data_vars={
                 DataVars.VX: xr.DataArray(
@@ -200,6 +242,12 @@ class ItsLiveReproject:
                     data=v,
                     coords=ds_coords,
                     attrs=self.ds[DataVars.V].attrs),
+                DataVars.V_ERROR: xr.DataArray(
+                    data=v_error,
+                    coords=ds_coords,
+                    attrs=self.ds[DataVars.V_ERROR].attrs \
+                          if DataVars.V_ERROR in self.ds \
+                          else ItsLiveReproject.V_ERROR_ATTRS),
             },
             coords={
                 Coords.Y: (Coords.Y, self.y0_grid, self.ds[Coords.Y].attrs),
@@ -212,6 +260,38 @@ class ItsLiveReproject:
         vx = None
         vy = None
         v = None
+        v_error = None
+        gc.collect()
+
+        # Update vx.vx_error (vx.stable_rmse in Optical legacy format) and
+        # vy.vy_error (vy.stable_rmse in Optical legacy format):
+        # rotate by transformation matrix that corresponds to the center of the grid
+        vx_error = self.ds[DataVars.VX].attrs[DataVars.STABLE_RMSE] \
+            if DataVars.STABLE_RMSE in self.ds[DataVars.VX].attrs else \
+            self.ds[DataVars.VX].attrs[DataVars.VX_ERROR]
+
+        vy_error = self.ds[DataVars.VY].attrs[DataVars.STABLE_RMSE] \
+            if DataVars.STABLE_RMSE in self.ds[DataVars.VY].attrs else \
+            self.ds[DataVars.VY].attrs[DataVars.VY_ERROR]
+
+        # Get transformation matrix for the center of polygon in target projection
+        mid_x_index = int(len(self.x0_grid)/2)
+        mid_y_index = int(len(self.y0_grid)/2)
+
+        v_error = np.matmul(self.transformation_matrix[mid_y_index, mid_x_index], [vx_error, vy_error])
+        reproject_ds[DataVars.VX].attrs[DataVars.VX_ERROR] = v_error[0]
+        reproject_ds[DataVars.VY].attrs[DataVars.VY_ERROR] = v_error[1]
+
+        if DataVars.STABLE_RMSE in reproject_ds[DataVars.VX].attrs:
+            # Delete legacy attribute for vx and vy if any
+            del reproject_ds[DataVars.VX].attrs[DataVars.STABLE_RMSE]
+            del reproject_ds[DataVars.VY].attrs[DataVars.STABLE_RMSE]
+
+        # Use garbage collection
+        vx = None
+        vy = None
+        v = None
+        v_error = None
         gc.collect()
 
         # Set reprojection information
@@ -294,10 +374,16 @@ class ItsLiveReproject:
         reproject_ds[DataVars.VX].attrs[DataVars.GRID_MAPPING] = proj_name
         reproject_ds[DataVars.VY].attrs[DataVars.GRID_MAPPING] = proj_name
         reproject_ds[DataVars.V].attrs[DataVars.GRID_MAPPING] = proj_name
+        reproject_ds[DataVars.V_ERROR].attrs[DataVars.GRID_MAPPING] = proj_name
 
         if DataVars.VP in self.ds:
             # This is Radar format, projected velocity is provided
-            vxp, vyp, vp = self.reproject_velocity(DataVars.VXP, DataVars.VYP, warp_options)
+            vxp, vyp, vp, vp_error = self.reproject_velocity(
+                DataVars.VXP,
+                DataVars.VYP,
+                DataVars.VP_ERROR,
+                self.ds[DataVars.VP_ERROR].values,
+                warp_options)
 
             reproject_ds[DataVars.VXP] = xr.DataArray(
                 data=vxp,
@@ -320,9 +406,17 @@ class ItsLiveReproject:
             )
             reproject_ds[DataVars.VP].attrs[DataVars.GRID_MAPPING] = proj_name
 
+            reproject_ds[DataVars.VP_ERROR] = xr.DataArray(
+                data=vp_error,
+                coords=ds_coords,
+                attrs=self.ds[DataVars.VP_ERROR].attrs
+            )
+            reproject_ds[DataVars.VP_ERROR].attrs[DataVars.GRID_MAPPING] = proj_name
+
             vxp = None
             vyp = None
             vp = None
+            vp_error = None
             gc.collect()
 
             # Process VA, VR
@@ -435,7 +529,12 @@ class ItsLiveReproject:
 
         return np_var
 
-    def reproject_velocity(self, vx: str, vy: str, warp_options: gdal.WarpOptions):
+    def reproject_velocity(self,
+        vx: str,
+        vy: str,
+        v_var: str,
+        v_error_np: np.ndarray,   # v_error in original projection
+        warp_options: gdal.WarpOptions):
         """
         Re-project velocity X and Y components and compute velocity magnitude.
         """
@@ -453,7 +552,7 @@ class ItsLiveReproject:
 
         # Convert velocity components to displacement (per transformation matrix requirement)
         # NOTE: displacement values are in pixel units
-        original_dtype = np_vx.dtype
+        # original_dtype = np_vx.dtype
 
         np_vx = np_vx.astype(type(self.x_size))
         np_vx[np_vx==DataVars.MISSING_VALUE] = np.nan
@@ -473,6 +572,9 @@ class ItsLiveReproject:
         vy.fill(DataVars.MISSING_VALUE)
         v = np.zeros((num_y, num_x))
         v.fill(DataVars.MISSING_VALUE)
+
+        v_error = np.zeros((num_y, num_x))
+        v_error.fill(DataVars.MISSING_VALUE)
 
         # Transform each (dx, dy) to (vx, vy) in output projection
         for y_index in range(num_y):
@@ -495,8 +597,13 @@ class ItsLiveReproject:
                     # Compute v: sqrt(vx^2 + vy^2)
                     v[y_index, x_index] = np.sqrt(xy_v[0]**2 + xy_v[1]**2)
 
-        # return (vx.astype(original_dtype), vy.astype(original_dtype), v.astype(original_dtype))
-        return (vx, vy, v)
+                    # Look up original velocity value to compute the scale factor
+                    # for v_error: scale_factor = v_old / v_new
+                    v_i, v_j = self.original_ij_index[y_index, x_index]
+                    if v[y_index, x_index] != 0:
+                        v_error[y_index, x_index] = (float)(v_error_np[v_j, v_i])*float(self.ds[v_var].isel(y=v_j, x=v_i).values.item())/float(v[y_index, x_index])
+
+        return (vx, vy, v, v_error)
 
     def create_transformation_matrix(self):
         """
@@ -563,6 +670,7 @@ class ItsLiveReproject:
         # Compute X unit vector based on xy0_points, xy_points
         # in output projection
         xunit_v = np.zeros((num_xy0_points, 3))
+
         # Compute unit vector for each cell of the output grid
         for index in range(num_xy0_points):
             diff = np.array(xy_points[index]) - np.array(xy0_points[index])
@@ -586,8 +694,10 @@ class ItsLiveReproject:
 
         # Compute transformation matrix per cell
         self.transformation_matrix = np.zeros((num_xy0_points), dtype=np.object)
-
         self.transformation_matrix.fill(DataVars.MISSING_VALUE)
+
+        # Store indices of original cells that correspond to re-projected cells
+        self.original_ij_index = np.zeros((num_xy0_points), dtype=np.object)
 
         # Counter of how many points don't have transformation matrix
         no_value_counter = 0
@@ -607,6 +717,8 @@ class ItsLiveReproject:
             # Find indices for the original point on its grid
             x_ind = int((ij_point[0] - self.i_limits.min) / self.x_size)
             y_ind = int((ij_point[1] - self.j_limits.max) / self.y_size)
+
+            self.original_ij_index[each_index] = [x_ind, y_ind]
 
             if (x_ind >= num_i) or (x_ind < 0) or (y_ind >= num_j) or (y_ind < 0):
                 no_value_counter += 1
@@ -660,8 +772,9 @@ class ItsLiveReproject:
 
                 self.transformation_matrix[each_index] = np.array([[raster1a, raster1b], [raster2a, raster2b]])
 
-        # Reshape transformation matrix into 2D matrix: (y, x)
+        # Reshape transformation matrix and original cell indices into 2D matrix: (y, x)
         self.transformation_matrix = self.transformation_matrix.reshape((len(self.y0_grid), len(self.x0_grid)))
+        self.original_ij_index = self.original_ij_index.reshape((len(self.y0_grid), len(self.x0_grid)))
         self.logger.info(f"Number of points with no transformation matrix: {no_value_counter} out of {num_xy0_points} points ({no_value_counter/num_xy0_points*100.0}%)")
 
     def spatial_ref_32x(self):
