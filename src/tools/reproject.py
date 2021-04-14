@@ -8,6 +8,8 @@ $ python reproject.py -i input_filename -p target_projection -o output_filename
 'output_filename' in NetCDF format.
 
 $ python ./reproject.py -i  LC08_L1TP_042242_20180721_20180731_01_T1_X_LC08_L1TP_042242_20170702_20170702_01_RT_G0240V01_P065.nc -o reproject_P065.nc -p 32627
+
+$ python ./reproject.py -i S1A_IW_SLC__1SSH_20170221T204710_20170221T204737_015387_0193F6_AB07_X_S1B_IW_SLC__1SSH_20170227T204628_20170227T204655_004491_007D11_6654_G0240V02_P945.nc -o reproject_radar.nc -p 32623
 """
 import argparse
 from datetime import datetime
@@ -69,20 +71,20 @@ class ItsLiveReproject:
 
     1. Compute bounding box for input granule in original P_in projection ("ij" naming convention)
     2. Re-project P_in bounding box to P_out projection ("xy" naming convention)
-    3. Compute grid in P_out projection based on its bounding bbox
-    4. Project each cell center in P_out grid to original P_in projection: (x0, y0)
-    5. Add unit length (240m) to x0 of (x0, y0) and project to P_out: (x1, y1)
-    6. Add unit length (240m) to y0 of (x0, y0) and project to P_out: (x2, y2)
+    3. Compute grid in P_out projection based on its bounding bbox: (x0, y0)
+    4. Project each cell center in P_out grid to original P_in projection: (i0, j0)
+    5. Add unit length (240m) to x of (i0, j0) and project to P_out: (x1, y1)
+    6. Add unit length (240m) to y of (i0, j0) and project to P_out: (x2, y2)
     7. In Geogrid code, set normal = (0, 0, 1)
-    8. Compute transformation matrix using Geogrid equations
+    8. Compute transformation matrix using Geogrid equations amd unit vectors
+       (x1, y1) and (x2, y2)
     9. Re-project v* values: gdal.warp(original_granule, P_out_grid) --> P_out_v*
        Apply tranformation matrix to P_out_v* per cell to get "true" v value
     """
-    # Number of years: any period would do as long as it's
-    # the same time period used to convert v(elocity) component to corresponding
-    # d(isplacement), and use the same time period in transformation matrix
-    # computations.
-    # Use one year
+    # Number of years: the same time period used to convert v(elocity) component
+    # to corresponding d(isplacement), and use the same time period in
+    # transformation matrix computations.
+    # Set to one year.
     TIME_DELTA = 1
 
     V_ERROR_ATTRS = {
@@ -90,6 +92,13 @@ class ItsLiveReproject:
         DataVars.DESCRIPTION_ATTR: DataVars.DESCRIPTION[DataVars.V_ERROR],
         DataVars.UNITS:            DataVars.M_Y_UNITS
     }
+
+    # Have to provide error threshold for gdal.warp to avoid large values
+    # being introduced by warping.
+    WARP_ET = 1e-5
+
+    # Use virtual memory format to avoid writing warped dataset to the file
+    WARP_FORMAT = 'vrt'
 
     def __init__(self, data, output_projection: int):
         """
@@ -106,7 +115,7 @@ class ItsLiveReproject:
             self.ds.load()
 
         # Input and output projections
-        self.ij_epsg = int(self.ds.UTM_Projection.spatial_epsg)
+        self.ij_epsg = int(self.ds.UTM_Projection.spatial_epsg if DataVars.UTM_PROJECTION in self.ds else self.ds.Polar_Stereographic.spatial_epsg)
         self.xy_epsg = output_projection
 
         if self.ij_epsg == self.xy_epsg:
@@ -176,6 +185,8 @@ class ItsLiveReproject:
         This methods warps X and Y components of v and vp velocities, and
         adjusts them by rotation for new projection.
         """
+        self.create_transformation_matrix()
+
         # Check if v_error is present in original data
         v_error_np = None
         if DataVars.V_ERROR in self.ds:
@@ -207,16 +218,12 @@ class ItsLiveReproject:
                         v_error_np[j_ind, i_ind] = (np.abs(vx_np[j_ind, i_ind])*vx_stable_rmse + \
                                                     np.abs(vy_np[j_ind, i_ind])*vy_stable_rmse) / v_np[j_ind, i_ind]
 
-            masked_np = np.ma.masked_equal(v_error_np, DataVars.MISSING_VALUE, copy=False)
-            self.logger.info(f"Original v_error:  min={masked_np.min()} max={masked_np.max()}")
-
-
-        self.create_transformation_matrix()
+        masked_np = np.ma.masked_equal(v_error_np, DataVars.MISSING_VALUE, copy=False)
+        self.logger.info(f"Original v_error:  min={masked_np.min()} max={masked_np.max()}")
 
         # outputBounds --- output bounds as (minX, minY, maxX, maxY) in target SRS
         warp_options = gdal.WarpOptions(
-            # format='netCDF',
-            format='vrt',   # Use virtual memory format to avoid writing warped dataset to the file
+            format=ItsLiveReproject.WARP_FORMAT,   # Use virtual memory format to avoid writing warped dataset to the file
             outputBounds=(self.x0_bbox.min, self.y0_bbox.min, self.x0_bbox.max, self.y0_bbox.max),
             xRes=self.x_size,
             yRes=self.y_size,
@@ -225,7 +232,7 @@ class ItsLiveReproject:
             srcNodata=DataVars.MISSING_VALUE,
             dstNodata=DataVars.MISSING_VALUE,
             resampleAlg=gdal.GRA_NearestNeighbour,
-            errorThreshold=0.001
+            errorThreshold=ItsLiveReproject.WARP_ET
         )
 
         # Compute vx.vx_error (vx.stable_rmse in Optical legacy format) and
@@ -292,6 +299,14 @@ class ItsLiveReproject:
                 Coords.X: (Coords.X, self.x0_grid, self.ds[Coords.X].attrs),
             },
             attrs=self.ds.attrs
+        )
+
+        # Rotate stable_shift_* and vx_error_*/vy_error_* attributes of vx and vy
+        self.rotate_velocity_attributes(
+            reproject_ds,
+            self.transformation_matrix[mid_y_index, mid_x_index],
+            DataVars.VX,
+            DataVars.VY
         )
 
         # Use garbage collection
@@ -408,12 +423,16 @@ class ItsLiveReproject:
             self.stable_rmse[DataVars.VXP] = vp_error[0]
             self.stable_rmse[DataVars.VYP] = vp_error[1]
 
+            vp_error_np = self.ds[DataVars.VP_ERROR].values
+            masked_np = np.ma.masked_equal(vp_error_np, DataVars.MISSING_VALUE, copy=False)
+            self.logger.info(f"Original vp_error:  min={masked_np.min()} max={masked_np.max()}")
+
             # This is Radar format, projected velocity is provided
             vxp, vyp, vp, vp_error = self.reproject_velocity(
                 DataVars.VXP,
                 DataVars.VYP,
-                DataVars.VP_ERROR,
-                self.ds[DataVars.VP_ERROR].values,
+                DataVars.VP,
+                vp_error_np,
                 warp_options)
 
             reproject_ds[DataVars.VXP] = xr.DataArray(
@@ -449,6 +468,14 @@ class ItsLiveReproject:
             vp_error = None
             gc.collect()
 
+            # Rotate stable_shift_* and vx_error_*/vy_error_* attributes of vx and vy
+            self.rotate_velocity_attributes(
+                reproject_ds,
+                self.transformation_matrix[mid_y_index, mid_x_index],
+                DataVars.VXP,
+                DataVars.VYP
+            )
+
             # Process VA, VR
             reproject_ds[DataVars.VA] = xr.DataArray(
                 data=self.warp_var(DataVars.VA, warp_options),
@@ -466,7 +493,7 @@ class ItsLiveReproject:
 
         warp_options = gdal.WarpOptions(
             # format='netCDF',
-            format='vrt',   # Use virtual memory format to avoid writing warped dataset to the file
+            format=ItsLiveReproject.WARP_FORMAT,
             outputBounds=(self.x0_bbox.min, self.y0_bbox.min, self.x0_bbox.max, self.y0_bbox.max),
             xRes=self.x_size,
             yRes=self.y_size,
@@ -475,7 +502,7 @@ class ItsLiveReproject:
             srcNodata=DataVars.MISSING_BYTE,
             dstNodata=DataVars.MISSING_BYTE,
             resampleAlg=gdal.GRA_NearestNeighbour,
-            errorThreshold=0.001
+            errorThreshold=ItsLiveReproject.WARP_ET
         )
 
         # All formats have the following data variables
@@ -519,11 +546,13 @@ class ItsLiveReproject:
                      DataVars.CHIP_SIZE_WIDTH,
                      DataVars.INTERP_MASK]:
             ds[each].attrs[DataVars.MISSING_VALUE_ATTR] = DataVars.MISSING_BYTE
+            if DataVars.FILL_VALUE_ATTR in ds[each].attrs:
+                del ds[each].attrs[DataVars.FILL_VALUE_ATTR]
+
             # ATTN: Must set '_FillValue' for each data variable that has
             #       its missing_value attribute set
             encoding_settings[each] = {
                 DataVars.FILL_VALUE_ATTR: DataVars.MISSING_BYTE,
-                DataVars.FILL_VALUE_ATTR: None
             }
             encoding_settings[each].update(compression)
 
@@ -531,7 +560,6 @@ class ItsLiveReproject:
         for each in [Coords.X, Coords.Y]:
             encoding_settings[each] = {DataVars.FILL_VALUE_ATTR: None}
 
-        DataVars.FILL_VALUE_ATTR: None
         # Explicitly set dtype to 'byte' for some data variables
         for each in [DataVars.CHIP_SIZE_HEIGHT,
                      DataVars.CHIP_SIZE_WIDTH]:
@@ -549,6 +577,9 @@ class ItsLiveReproject:
                 }
                 encoding_settings[each].update(compression)
 
+                if DataVars.FILL_VALUE_ATTR in ds[each].attrs:
+                    del ds[each].attrs[DataVars.FILL_VALUE_ATTR]
+
                 # Set missing_value only on first write to the disk store, otherwise
                 # will get "ValueError: failed to prevent overwriting existing key
                 # missing_value in attrs."
@@ -559,6 +590,46 @@ class ItsLiveReproject:
 
         # write re-projected data to the file
         ds.to_netcdf(output_file, engine="h5netcdf", encoding = encoding_settings)
+
+    def rotate_velocity_attributes(self, reproject_ds: xr.Dataset, rot_mat: np.ndarray,
+        vx_var: str, vy_var: str):
+        """
+        Rotate stable_shift_* and vx_error_*/vy_error_* attributes for
+        corresponding data variables.
+        """
+        # Rotate x and y components of the same attribute by transformation matrix
+        # that corresponds to the center of the grid
+        for var_postfix in ('_error_mask', '_error_slow', '_error_modeled',
+            ):
+            vx_var_name = vx_var + var_postfix
+            vy_var_name = vy_var + var_postfix
+            vx_error = float(self.ds[vx_var].attrs[vx_var_name])
+            vy_error = float(self.ds[vy_var].attrs[vy_var_name])
+
+            vx_error *= ItsLiveReproject.TIME_DELTA/self.x_size
+            vy_error *= ItsLiveReproject.TIME_DELTA/np.abs(self.y_size)
+
+            error = np.matmul(rot_mat, [vx_error, vy_error])
+
+            # Set new attribute values for variables
+            reproject_ds[vx_var].attrs[vx_var_name] = error[0]
+            reproject_ds[vy_var].attrs[vy_var_name] = error[1]
+
+        # Rotate x and y components of the same attribute by transformation matrix
+        # that corresponds to the center of the grid
+        for var in (DataVars.STABLE_SHIFT, DataVars.STABLE_SHIFT_MASK,
+            DataVars.STABLE_SHIFT_SLOW):
+            vx_error = float(self.ds[vx_var].attrs[var])
+            vy_error = float(self.ds[vy_var].attrs[var])
+
+            vx_error *= ItsLiveReproject.TIME_DELTA/self.x_size
+            vy_error *= ItsLiveReproject.TIME_DELTA/np.abs(self.y_size)
+
+            error = np.matmul(rot_mat, [vx_error, vy_error])
+
+            # Set new attribute values for variables
+            reproject_ds[vx_var].attrs[var] = error[0]
+            reproject_ds[vy_var].attrs[var] = error[1]
 
     def warp_var(self, var: str, warp_options: gdal.WarpOptions):
         """
@@ -581,33 +652,33 @@ class ItsLiveReproject:
         velocity error.
         """
         # Warp x component
-        # dataset = gdal.Open(f'NETCDF:"{self.input_file}":{vx_var}')
-        # _vx = self.ds[vx_var].values
-        # _vx = _vx.astype(type(self.x_size))
-        # _vx[_vx==DataVars.MISSING_VALUE] = np.nan
-        # self.logger.info(f"Original vx:  min={np.nanmin(_vx)} max={np.nanmax(_vx)}")
-        # dataset = None
+        dataset = gdal.Open(f'NETCDF:"{self.input_file}":{vx_var}')
+        _vx = self.ds[vx_var].values
+        _vx = _vx.astype(type(self.x_size))
+        _vx[_vx==DataVars.MISSING_VALUE] = np.nan
+        self.logger.info(f"Original {vx_var}:  min={np.nanmin(_vx)} max={np.nanmax(_vx)}")
+        dataset = None
 
         np_vx = gdal.Warp('', f'NETCDF:"{self.input_file}":{vx_var}', options=warp_options).ReadAsArray()
         masked_np = np.ma.masked_equal(np_vx, DataVars.MISSING_VALUE, copy=False)
-        self.logger.info(f"Warped vx:  min={masked_np.min()} max={masked_np.max()}")
+        self.logger.info(f"Warped {vx_var}:  min={masked_np.min()} max={masked_np.max()}")
 
         np_vx = np_vx.astype(np.float)
         np_vx[np_vx==DataVars.MISSING_VALUE] = np.nan
 
         # Warp y component
-        # dataset = gdal.Open(f'NETCDF:"{self.input_file}":{vy_var}')
-        # _vy = self.ds[vy_var].values
-        # _vy = _vy.astype(type(self.y_size))
-        # _vy[_vy==DataVars.MISSING_VALUE] = np.nan
-        # self.logger.info(f"Original vy:  min={np.nanmin(_vy)} max={np.nanmax(_vy)}")
-        # dataset = None
+        dataset = gdal.Open(f'NETCDF:"{self.input_file}":{vy_var}')
+        _vy = self.ds[vy_var].values
+        _vy = _vy.astype(type(self.y_size))
+        _vy[_vy==DataVars.MISSING_VALUE] = np.nan
+        self.logger.info(f"Original {vy_var}:  min={np.nanmin(_vy)} max={np.nanmax(_vy)}")
+        dataset = None
 
         # dataset=gdal.Translate('temp_vy.nc', dataset, **kwargs)
         # vy_ds = gdal.Warp('', dataset, options=warp_options)
         np_vy = gdal.Warp('', f'NETCDF:"{self.input_file}":{vy_var}', options=warp_options).ReadAsArray()
         masked_np = np.ma.masked_equal(np_vy, DataVars.MISSING_VALUE, copy=False)
-        self.logger.info(f"Warped vy:  min={masked_np.min()} max={masked_np.max()}")
+        self.logger.info(f"Warped {vy_var}:  min={masked_np.min()} max={masked_np.max()}")
 
         np_vy = np_vy.astype(np.float)
         np_vy[np_vy==DataVars.MISSING_VALUE] = np.nan
@@ -626,6 +697,8 @@ class ItsLiveReproject:
         v = np.full((num_y, num_x), DataVars.MISSING_VALUE, dtype=np.short)
         v_error = np.full((num_y, num_x), DataVars.MISSING_VALUE, dtype=np.short)
 
+        # TODO: make use of parallel processing as cells are independent to speed up
+        #       the processing
         for y_index in tqdm(range(num_y), ascii=True, desc=f"Re-projecting {vx_var}, {vy_var}..."):
             for x_index in range(num_x):
                 dv = np.array([
@@ -657,40 +730,35 @@ class ItsLiveReproject:
 
                     else:
                         if v[y_index, x_index] != 0:
-                            self.logger.info(f"Skipping v_error conversion due to invalid scale factor: v_old={v_ij_value}, v_new={v[y_index, x_index]}")
-                            continue
+                            # Set re-projected v to zero - non-zero vx and vy values are
+                            # introduced by warping
+                            vx[y_index, x_index] = 0
+                            vy[y_index, x_index] = 0
+                            v[y_index, x_index] = 0
 
                     if v_ij_value != DataVars.MISSING_VALUE and v_error_np[v_j, v_i] != DataVars.MISSING_VALUE:
                         v_error[y_index, x_index] = v_error_np[v_j, v_i]*scale_factor
 
-                        # if v_error[y_index, x_index] > 30:
-                        #     self.logger.info(f"Computed v_error={v_error[y_index, x_index]}: v_error_old={v_error_np[v_j, v_i]}")
-                        #     self.logger.info(f"--->indices: i={v_i} j={v_j} vs. x={x_index} y={y_index}")
-                        #     self.logger.info(f"--->v:   v_new={v[y_index, x_index]} v_old={v_ij_value}")
-                        #     self.logger.info(f"--->old: vx={self.ds['vx'].isel(y=v_j, x=v_i).values.item()} vy={self.ds['vy'].isel(y=v_j, x=v_i).values.item()}")
-                        #     self.logger.info(f"--->new: vx={vx[y_index, x_index]} vy={vy[y_index, x_index]}")
-                        #     self.logger.info(f"--->dv={dv*self.x_size} original_dx={_vx[v_j, v_i]} original_dy={_vy[v_j, v_i]}")
+                        # Track large differences in v_error values. If observed,
+                        # most likely need to reduce error threshold for the gdal.warp()
+                        if np.abs(v_error[y_index, x_index] - v_error_np[v_j, v_i]) > 100:
+                            self.logger.info(f"Computed {v_var}_error={v_error[y_index, x_index]}: v_error_old={v_error_np[v_j, v_i]}")
+                            self.logger.info(f"--->indices: i={v_i} j={v_j} vs. x={x_index} y={y_index}")
+                            self.logger.info(f"--->v:       {v_var}_new={v[y_index, x_index]} {v_var}_old={v_ij_value}")
+                            vx_value = self.ds[vx_var].isel(y=v_j, x=v_i).values.item()
+                            vy_value = self.ds[vy_var].isel(y=v_j, x=v_i).values.item()
+                            self.logger.info(f"--->old:     {vx_var}={vx_value} {vy_var}={vy_value}")
+                            self.logger.info(f"--->new:     {vx_var}={vx[y_index, x_index]} {vy_var}={vy[y_index, x_index]}")
+                            self.logger.info(f"--->warped_dv={dv*self.x_size}: original_{vx_var}={_vx[v_j, v_i]} original_{vy_var}={_vy[v_j, v_i]}")
 
         masked_np = np.ma.masked_equal(vx, DataVars.MISSING_VALUE, copy=False)
-        self.logger.info(f"Rotated vx:  min={masked_np.min()} max={masked_np.max()}")
+        self.logger.info(f"Rotated {vx_var}:  min={masked_np.min()} max={masked_np.max()}")
 
         masked_np = np.ma.masked_equal(vy, DataVars.MISSING_VALUE, copy=False)
-        self.logger.info(f"Rotated vy:  min={masked_np.min()} max={masked_np.max()}")
+        self.logger.info(f"Rotated {vy_var}:  min={masked_np.min()} max={masked_np.max()}")
 
         masked_np = np.ma.masked_equal(v_error, DataVars.MISSING_VALUE, copy=False)
-        self.logger.info(f"Scaled v_error:  min={masked_np.min()} max={masked_np.max()}")
-
-        # vx_nan = vx.astype(float)
-        # vx_nan[vx_nan==DataVars.MISSING_VALUE] = np.nan
-        # self.logger.info(f"Rotated vx:  min={np.nanmin(vx_nan)} max={np.nanmax(vx_nan)}")
-        #
-        # vy_nan = vy.astype(float)
-        # vy_nan[vy_nan==DataVars.MISSING_VALUE] = np.nan
-        # self.logger.info(f"Rotated vy:  min={np.nanmin(vy_nan)} max={np.nanmax(vy_nan)}")
-        #
-        # v_error_nan = v_error.astype(float)
-        # v_error_nan[v_error_nan==DataVars.MISSING_VALUE] = np.nan
-        # self.logger.info(f"Scaled v_error:  min={np.nanmin(v_error_nan)} max={np.nanmax(v_error_nan)}")
+        self.logger.info(f"Scaled {v_var}_error:  min={masked_np.min()} max={masked_np.max()}")
 
         return (vx, vy, v, v_error)
 
