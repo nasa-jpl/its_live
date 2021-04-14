@@ -611,9 +611,10 @@ class ItsLiveReproject:
 
             error = np.matmul(rot_mat, [vx_error, vy_error])
 
-            # Set new attribute values for variables
-            reproject_ds[vx_var].attrs[vx_var_name] = error[0]
-            reproject_ds[vy_var].attrs[vy_var_name] = error[1]
+            # Set new attribute values for variables (original granule has them
+            # at 1 digit of precision - keep the same format)
+            reproject_ds[vx_var].attrs[vx_var_name] = round(error[0], 1)
+            reproject_ds[vy_var].attrs[vy_var_name] = round(error[1], 1)
 
         # Rotate x and y components of the same attribute by transformation matrix
         # that corresponds to the center of the grid
@@ -627,9 +628,10 @@ class ItsLiveReproject:
 
             error = np.matmul(rot_mat, [vx_error, vy_error])
 
-            # Set new attribute values for variables
-            reproject_ds[vx_var].attrs[var] = error[0]
-            reproject_ds[vy_var].attrs[var] = error[1]
+            # Set new attribute values for variables (original granule has them
+            # at 1 digit of precision - keep the same format)
+            reproject_ds[vx_var].attrs[var] = round(error[0], 1)
+            reproject_ds[vy_var].attrs[var] = round(error[1], 1)
 
     def warp_var(self, var: str, warp_options: gdal.WarpOptions):
         """
