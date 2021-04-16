@@ -233,8 +233,7 @@ parser.add_argument('-start_chunks_at_file',
                     action='store',
                     type=int,
                     default=0,
-                    help='start run at chunk that
-                     begins at file n [%(default)d]')
+                    help='start run at chunk that begins at file n [%(default)d]')
 parser.add_argument('-stop_chunks_at_file',
                     action='store',
                     type=int,
