@@ -16,12 +16,16 @@ channels:
 - conda-forge
 
 dependencies:
-- python=3.9
+- python=3.8
 - dask
 - h5py
 - h5netcdf
+- netcdf4
 - xarray
 - flake8
 - s3fs
 - tqdm
 - gdal
+- pip
+- pip:
+  - scipy
