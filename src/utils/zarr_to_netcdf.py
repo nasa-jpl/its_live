@@ -12,6 +12,9 @@ import timeit
 import warnings
 import xarray as xr
 
+from itscube_types import Coords, DataVars
+
+
 if __name__ == '__main__':
     warnings.filterwarnings('ignore')
 
@@ -31,6 +34,25 @@ if __name__ == '__main__':
     # Don't decode time delta's as it does some internal conversion based on
     # provided units
     ds_zarr = xr.open_zarr(args.input, decode_timedelta=False)
+    # print(f"mid_date: {ds_zarr.mid_date}")
+    # print(f"x: {ds_zarr.x.attrs}")
+    # print(f"y: {ds_zarr.y.attrs}")
+
+    # This is just a work around for coordinates attributes not being written
+    # to the Zarr store (submit xarray ticket?)
+    ds_zarr.mid_date.attrs = {
+        DataVars.STD_NAME: Coords.STD_NAME[Coords.MID_DATE],
+        DataVars.DESCRIPTION_ATTR: Coords.DESCRIPTION[Coords.MID_DATE]
+    }
+    ds_zarr.x.attrs = {
+        DataVars.STD_NAME: Coords.STD_NAME[Coords.X],
+        DataVars.DESCRIPTION_ATTR: Coords.DESCRIPTION[Coords.X]
+    }
+    ds_zarr.y.attrs = {
+        DataVars.STD_NAME: Coords.STD_NAME[Coords.Y],
+        DataVars.DESCRIPTION_ATTR: Coords.DESCRIPTION[Coords.Y]
+    }
+
     time_delta = timeit.default_timer() - start_time
     print(f"Read Zarr {args.input} (took {time_delta} seconds)")
 
@@ -67,8 +89,13 @@ if __name__ == '__main__':
         'vp_error':            {'_FillValue': -32767.0, 'dtype': 'short'},
         'acquisition_img1':    {'units': 'days since 1970-01-01'},
         'acquisition_img2':    {'units': 'days since 1970-01-01'},
-        'date_center':         {'units': 'days since 1970-01-01'},
-        'mid_date':            {'units': 'days since 1970-01-01'}
+        'date_center':         {'_FillValue': None, 'units': 'days since 1970-01-01'},
+        'mid_date':            {'_FillValue': None, 'units': 'days since 1970-01-01'},
+        'autoRIFT_software_version': {'_FillValue': None},
+        'stable_count':        {'_FillValue': None},
+        'date_dt':             {'_FillValue': None},
+        'x':                   {'_FillValue': None},
+        'y':                   {'_FillValue': None}
     }
 
     encode_data_vars = (
