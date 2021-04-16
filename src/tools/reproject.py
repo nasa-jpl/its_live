@@ -10,6 +10,8 @@ $ python reproject.py -i input_filename -p target_projection -o output_filename
 $ python ./reproject.py -i  LC08_L1TP_042242_20180721_20180731_01_T1_X_LC08_L1TP_042242_20170702_20170702_01_RT_G0240V01_P065.nc -o reproject_P065.nc -p 32627
 
 $ python ./reproject.py -i S1A_IW_SLC__1SSH_20170221T204710_20170221T204737_015387_0193F6_AB07_X_S1B_IW_SLC__1SSH_20170227T204628_20170227T204655_004491_007D11_6654_G0240V02_P945.nc -o reproject_radar.nc -p 32623
+
+$ python ./reproject.py -i optical-updated/LC08_L1TP_009011_20200617_20200626_01_T1__X_LC08_L1TP_009011_20200703_20200708_01_T1__G0240V02_P071.nc -o reproject_optical_updated_P071.nc -p 32623
 """
 import argparse
 from datetime import datetime
