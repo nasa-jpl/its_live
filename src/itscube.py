@@ -925,9 +925,30 @@ class ITSCube:
         self.layers = xr.Dataset(
             data_vars = {DataVars.URL: ([Coords.MID_DATE], self.urls)},
             coords = {
-                Coords.MID_DATE: self.dates,
-                Coords.X: self.grid_x,
-                Coords.Y: self.grid_y
+                Coords.MID_DATE: (
+                    Coords.MID_DATE,
+                    self.dates,
+                    {
+                        DataVars.STD_NAME: Coords.STD_NAME[Coords.MID_DATE],
+                        DataVars.DESCRIPTION_ATTR: Coords.DESCRIPTION[Coords.MID_DATE]
+                    }
+                ),
+                Coords.X: (
+                    Coords.X,
+                    self.grid_x,
+                    {
+                        DataVars.STD_NAME: Coords.STD_NAME[Coords.X],
+                        DataVars.DESCRIPTION_ATTR: Coords.DESCRIPTION[Coords.X]
+                    }
+                ),
+                Coords.Y: (
+                    Coords.Y,
+                    self.grid_y,
+                    {
+                        DataVars.STD_NAME: Coords.STD_NAME[Coords.Y],
+                        DataVars.DESCRIPTION_ATTR: Coords.DESCRIPTION[Coords.Y]
+                    }
+                )
             },
             attrs = {
                 'title': 'ITS_LIVE datacube of image_pair velocities',
@@ -940,11 +961,6 @@ class ITSCube:
                 'projection': str(self.projection)
             }
         )
-        # Set attributes for the "mid_date" coordinate.
-        # TODO: attributes do not propagate to the Zarr store for some reason - ???
-        self.layers[Coords.MID_DATE].attrs[DataVars.STD_NAME] = Coords.STD_NAME[Coords.MID_DATE]
-        self.layers[Coords.MID_DATE].attrs[DataVars.DESCRIPTION_ATTR] = Coords.DESCRIPTION[Coords.MID_DATE]
-        # print("MID_DATE: ", self.layers.coords[Coords.MID_DATE])
 
         # Set attributes for 'url' data variable
         self.layers[DataVars.URL].attrs[DataVars.STD_NAME] = DataVars.URL
