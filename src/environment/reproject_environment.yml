@@ -29,3 +29,5 @@ dependencies:
 - pip
 - pip:
   - scipy
+  - geojson
+  - pyproj
