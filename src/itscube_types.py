@@ -12,13 +12,17 @@ class Coords:
     Y = 'y'
 
     STD_NAME = {
-        MID_DATE: "image_pair_center_date_with_time_separation"
+        MID_DATE: "image_pair_center_date_with_time_separation",
+        X:        "projection_x_coordinate",
+        Y:        "projection_y_coordinate"
     }
 
     DESCRIPTION = {
         MID_DATE: "midpoint of image 1 and image 2 acquisition date with time " \
             "separation (in days) between acquisition of image 1 and image 2 as " \
-            "milliseconds"
+            "milliseconds",
+        X:  "x coordinate of projection",
+        Y:  "y coordinate of projection"
     }
 
 
@@ -32,7 +36,9 @@ class DataVars:
     DESCRIPTION_ATTR           = 'description'  # v, vx, vy
     GRID_MAPPING               = 'grid_mapping' # v, vx, vy - store only one
     STABLE_COUNT               = 'stable_count' # vx, vy    - store only one
-    STABLE_SHIFT               = 'stable_shift' # vx, vy
+    STABLE_SHIFT               = 'stable_shift' # vx, vy, vxp, vyp
+    STABLE_SHIFT_MASK          = 'stable_shift_mask' # vx, vy, vxp, vyp
+    STABLE_SHIFT_SLOW          = 'stable_shift_slow' # vx, vy, vxp, vyp
     FLAG_STABLE_SHIFT_MEANINGS = 'flag_stable_shift_meanings' # vx, vy
 
     # Optical Legacy format only:
@@ -75,6 +81,8 @@ class DataVars:
     VX               = 'vx'
     VXP              = 'vxp'
     VYP              = 'vyp'
+    VXP_ERROR        = 'vxp_error'
+    VYP_ERROR        = 'vyp_error'
 
     # Specific to the datacube
     URL = 'original_url_path'
