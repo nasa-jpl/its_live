@@ -21,22 +21,22 @@ class memtracker:
         self.process = psutil.Process()
         self.startrss = self.process.memory_info().rss
         self.startvms = self.process.memory_info().vms
-        
+
     def meminfo(self, message):
         if self.output_time:
             time_elapsed_seconds = time.time() - self.start_time
             print(f'{message:<30}:  time: {time_elapsed_seconds:8.2f} seconds    mem_percent {self.process.memory_percent()} ' +
                     f'delrss={self.process.memory_info().rss - self.startrss:16,}    ' +
-                    f'delvms={self.process.memory_info().vms - self.startvms:16,}', 
+                    f'delvms={self.process.memory_info().vms - self.startvms:16,}',
                     flush=True)
         else: # don't output time
             print(f'{message:<30}:  delrss={self.process.memory_info().rss - self.startrss:16,}   mem_percent {self.process.memory_percent()} ' +
-                    f'delvms={self.process.memory_info().vms - self.startvms:16,}', 
+                    f'delvms={self.process.memory_info().vms - self.startvms:16,}',
                     flush=True)
 
 mt = memtracker()
 
-s3 = s3fs.S3FileSystem()
+s3 = s3fs.S3FileSystem(anon=True)
 
 
 # returns a string (N78W124) for directory name based on granule centerpoint lat,lon
@@ -67,10 +67,10 @@ def image_pair_feature_from_path(infilewithpath, proj_epsg, five_points_per_side
     # from s3.ls:
     #     infilewithpath = 'https://s3/its-live-data.jpl.nasa.gov/velocity_image_pair/landsat/v00.0/32609/LC08_L1TP_050024_20180713_20180730_01_T1_X_LE07_L1TP_050024_20180315_20180316_01_RT_G0240V01_P072.nc'
 
-    # base URL from S3 directory listing has file path for s3fs access, not what you need for http directly, 
+    # base URL from S3 directory listing has file path for s3fs access, not what you need for http directly,
     #  so that is hard coded here. (or not used - don't need it in every feature)
     # base_URL = 'http://its-live-data.jpl.nasa.gov.s3.amazonaws.com/velocity_image_pair/landsat/v00.0'
-    
+
     directory,filename = infilewithpath.split('/')[-2:]
 
     # infilewithpath = 'LC08_L1TP_050024_20180814_20180828_01_T1_X_LC08_L1TP_050024_20170928_20171013_01_T1_G0240V01_P091.nc'
@@ -83,7 +83,7 @@ def image_pair_feature_from_path(infilewithpath, proj_epsg, five_points_per_side
         # netCDF4/HDF5 cf 1.6 has x and y vectors of array pixel CENTERS
         xvals = np.array(inh5.get('x'))
         yvals = np.array(inh5.get('y'))
-        
+
         if proj_epsg == '3031' or proj_epsg == '3413':
             projection_cf = inh5['Polar_Stereographic']
         else:
@@ -111,24 +111,24 @@ def image_pair_feature_from_path(infilewithpath, proj_epsg, five_points_per_side
     projection_cf_maxx = xvals[-1] + pix_size_x/2.0
     projection_cf_miny = yvals[-1] + pix_size_y/2.0 # pix_size_y is negative!
     projection_cf_maxy = yvals[0] - pix_size_y/2.0  # pix_size_y is negative!
-    
+
 
     transformer = pyproj.Transformer.from_crs(f"EPSG:{epsgcode}", "EPSG:4326", always_xy=True) # ensure lonlat output order
-        
+
     ll_lonlat = np.round(transformer.transform(projection_cf_minx,projection_cf_miny),decimals = 7).tolist()
     lr_lonlat = np.round(transformer.transform(projection_cf_maxx,projection_cf_miny),decimals = 7).tolist()
     ur_lonlat = np.round(transformer.transform(projection_cf_maxx,projection_cf_maxy),decimals = 7).tolist()
     ul_lonlat = np.round(transformer.transform(projection_cf_minx,projection_cf_maxy),decimals = 7).tolist()
-    
+
     # find center lon lat for inclusion in feature (to determine lon lat grid cell directory)
 #     projection_cf_centerx = (xvals[0] + xvals[-1])/2.0
-#     projection_cf_centery = (yvals[0] + yvals[-1])/2.0    
+#     projection_cf_centery = (yvals[0] + yvals[-1])/2.0
     center_lonlat = np.round(transformer.transform((xvals[0] + xvals[-1])/2.0,(yvals[0] + yvals[-1])/2.0 ),decimals = 7).tolist()
 
     if five_points_per_side:
         fracs = [0.25, 0.5, 0.75]
         polylist = [] # ring in counterclockwise order
-        
+
         polylist.append(ll_lonlat)
         dx = projection_cf_maxx - projection_cf_minx
         dy = projection_cf_miny - projection_cf_miny
@@ -140,7 +140,7 @@ def image_pair_feature_from_path(infilewithpath, proj_epsg, five_points_per_side
         dy = projection_cf_maxy - projection_cf_miny
         for frac in fracs:
             polylist.append(np.round(transformer.transform(projection_cf_maxx + (frac * dx), projection_cf_miny + (frac * dy)),decimals = 7).tolist())
-       
+
         polylist.append(ur_lonlat)
         dx = projection_cf_minx - projection_cf_maxx
         dy = projection_cf_maxy - projection_cf_maxy
@@ -152,20 +152,20 @@ def image_pair_feature_from_path(infilewithpath, proj_epsg, five_points_per_side
         dy = projection_cf_miny - projection_cf_maxy
         for frac in fracs:
             polylist.append(np.round(transformer.transform(projection_cf_minx + (frac * dx), projection_cf_maxy + (frac * dy)),decimals = 7).tolist())
-       
+
         polylist.append(ll_lonlat)
-        
+
     else:
         # only the corner points
         polylist = [ ll_lonlat, lr_lonlat, ur_lonlat, ul_lonlat, ll_lonlat ]
-        
+
     poly = geojson.Polygon([polylist])
 
     middate = img_pair_info_dict['date_center']
     deldays = img_pair_info_dict['date_dt']
     percent_valid_pix = img_pair_info_dict['roi_valid_percentage']
 
-    feat = geojson.Feature( geometry=poly, 
+    feat = geojson.Feature( geometry=poly,
                             properties={
                                         'filename': filename,
                                         'directory': directory,
@@ -186,8 +186,8 @@ def image_pair_feature_from_path(infilewithpath, proj_epsg, five_points_per_side
 
 
 parser = argparse.ArgumentParser( \
-    description="""make_geojson_features_for_imagepairs_v1.py 
-    
+    description="""make_geojson_features_for_imagepairs_v1.py
+
                     produces output geojson FeatureCollection for each nn image_pairs from a zone.
                     v1 adds 5 points per side to geom (so 3 interior and the two corners from v0)
                     and the ability to stop the chunks (in addition to the start allowed in v0)
@@ -196,47 +196,48 @@ parser = argparse.ArgumentParser( \
     epilog='',
     formatter_class=argparse.RawDescriptionHelpFormatter)
 
-parser.add_argument('epsg_zone', 
-                    action='store', 
-                    type=str, 
+parser.add_argument('epsg_zone',
+                    action='store',
+                    type=str,
                     help='epsg code for (utm or PS) zone to catalog [e.g. 32606]')
-                    
-parser.add_argument('-base_dir_s3fs', 
-                    action='store', 
-                    type=str, 
+
+parser.add_argument('-base_dir_s3fs',
+                    action='store',
+                    type=str,
                     default='its-live-data.jpl.nasa.gov/velocity_image_pair/landsat/v00.0',
                     help='S3 path to tile catalog directories (not including the EPSG code for zone of tile) [%(default)s]')
 
-parser.add_argument('-S3_output_directory', 
-                    action='store', 
-                    type=str, 
+parser.add_argument('-S3_output_directory',
+                    action='store',
+                    type=str,
                     default='glaciertools.net/imgprfeatcolls',
                     help='output path for featurecollections [%(default)s]')
 
-parser.add_argument('-read_filelist_from_S3_file', 
-                    action='store', 
-                    type=str, 
+parser.add_argument('-read_filelist_from_S3_file',
+                    action='store',
+                    type=str,
                     default=None,
                     help='get input file list from S3 file here: [None]')
-                    
-parser.add_argument('-base_download_URL', 
-                    action='store', 
-                    type=str, 
+
+parser.add_argument('-base_download_URL',
+                    action='store',
+                    type=str,
                     default='http://its-live-data.jpl.nasa.gov.s3.amazonaws.com/velocity_image_pair/landsat/v00.0',
                     help='URL base for download of image pair - need zone(directory) and filename as well [%(default)s]')
-parser.add_argument('-chunk_by', 
-                    action='store', 
-                    type=int, 
+parser.add_argument('-chunk_by',
+                    action='store',
+                    type=int,
                     default=20000,
                     help='chunk feature collections to have chunk_by features each [%(default)d]')
-parser.add_argument('-start_chunks_at_file', 
-                    action='store', 
-                    type=int, 
+parser.add_argument('-start_chunks_at_file',
+                    action='store',
+                    type=int,
                     default=0,
-                    help='start run at chunk that begins at file n [%(default)d]')
-parser.add_argument('-stop_chunks_at_file', 
-                    action='store', 
-                    type=int, 
+                    help='start run at chunk that
+                     begins at file n [%(default)d]')
+parser.add_argument('-stop_chunks_at_file',
+                    action='store',
+                    type=int,
                     default=0,
                     help='stop run just befor chunk that begins at file n [%(default)d]')
 args = parser.parse_args()
@@ -309,45 +310,14 @@ for num,(start,stop) in enumerate(chunks_startstop):
                 print(f'{count:6d}/{stop:6d}', end = '\r', flush = True)
         feature = image_pair_feature_from_path(infilewithpath, inzone, five_points_per_side = True)
         featurelist.append(feature)
+
     featureColl = geojson.FeatureCollection(featurelist)
     outfilename = f'imgpr_{inzone}_{start:06d}_{stop:06d}.json'
-    with s3.open(f'{args.S3_output_directory}/{outfilename}','w') as outf:
+    # with s3.open(f'{args.S3_output_directory}/{outfilename}','w') as outf:
+    # ML: write to local file for now
+    with open(outfilename,'w') as outf:
         geojson.dump(featureColl,outf)
+
     mt.meminfo(f'wrote {args.S3_output_directory}/{outfilename}')
     featurelist = None
     featureColl = None
-
-
-
-
-
-
-
-
-
-
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
