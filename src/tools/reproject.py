@@ -73,13 +73,16 @@ class ItsLiveReproject:
     2. Re-project P_in bounding box to P_out projection ("xy" naming convention)
     3. Compute grid in P_out projection based on its bounding bbox: (x0, y0)
     4. Project each cell center in P_out grid to original P_in projection: (i0, j0)
-    5. Add unit length (240m) to x of (i0, j0) and project to P_out: (x1, y1)
-    6. Add unit length (240m) to y of (i0, j0) and project to P_out: (x2, y2)
+    5. Add unit length (240m) to x of (i0, j0) and project to P_out: (x1, y1),
+       compute x_unit vector based on (x0, y0) and (x1, y1)
+    6. Add unit length (240m) to y of (i0, j0) and project to P_out: (x2, y2),
+       compute y_unit vector based on (x0, y0) and (x2, y2)
     7. In Geogrid code, set normal = (0, 0, 1)
     8. Compute transformation matrix using Geogrid equations amd unit vectors
-       (x1, y1) and (x2, y2)
+       x_unit and y_unit per each cell of grid in output projection
     9. Re-project v* values: gdal.warp(original_granule, P_out_grid) --> P_out_v*
-       Apply tranformation matrix to P_out_v* per cell to get "true" v value
+       Apply tranformation matrix to P_out_v* per cell to get "true" v value in
+       output projection
     """
     # Number of years: the same time period used to convert v(elocity) component
     # to corresponding d(isplacement), and use the same time period in
@@ -249,14 +252,21 @@ class ItsLiveReproject:
         vx_error *= ItsLiveReproject.TIME_DELTA/self.x_size
         vy_error *= ItsLiveReproject.TIME_DELTA/np.abs(self.y_size)
 
-        # Get transformation matrix for the center of polygon in target projection
-        mid_x_index = int(len(self.x0_grid)/2)
-        mid_y_index = int(len(self.y0_grid)/2)
+        # Get average transformation matrix to apply to scalar values (attributes)
+        num_cells = 0
+        avg_rotation_mat = np.zeros((2, 2), dtype=object)
+        rows, cols =  self.transformation_matrix.shape
+        for each_y in range(rows):
+            for each_x in range(cols):
+                if not np.isscalar(self.transformation_matrix[each_y, each_x]):
+                    avg_rotation_mat += self.transformation_matrix[each_y, each_x]
+                    num_cells += 1
+        avg_rotation_mat /= num_cells
 
-        v_error = np.matmul(self.transformation_matrix[mid_y_index, mid_x_index], [vx_error, vy_error])
+        v_error = np.matmul(avg_rotation_mat, [vx_error, vy_error])
         # New v_error values for v components
-        self.stable_rmse[DataVars.VX] = v_error[0]
-        self.stable_rmse[DataVars.VY] = v_error[1]
+        self.stable_rmse[DataVars.VX] = round(v_error[0], 1)
+        self.stable_rmse[DataVars.VY] = round(v_error[1], 1)
 
         # Compute new vx, vy and v
         vx, vy, v, v_error = self.reproject_velocity(
@@ -304,7 +314,7 @@ class ItsLiveReproject:
         # Rotate stable_shift_* and vx_error_*/vy_error_* attributes of vx and vy
         self.rotate_velocity_attributes(
             reproject_ds,
-            self.transformation_matrix[mid_y_index, mid_x_index],
+            avg_rotation_mat,
             DataVars.VX,
             DataVars.VY
         )
@@ -418,10 +428,10 @@ class ItsLiveReproject:
             vx_error *= ItsLiveReproject.TIME_DELTA/self.x_size
             vy_error *= ItsLiveReproject.TIME_DELTA/np.abs(self.y_size)
 
-            vp_error = np.matmul(self.transformation_matrix[mid_y_index, mid_x_index], [vx_error, vy_error])
+            vp_error = np.matmul(avg_rotation_mat, [vx_error, vy_error])
             # New v_error values for vp components
-            self.stable_rmse[DataVars.VXP] = vp_error[0]
-            self.stable_rmse[DataVars.VYP] = vp_error[1]
+            self.stable_rmse[DataVars.VXP] = round(vp_error[0], 1)
+            self.stable_rmse[DataVars.VYP] = round(vp_error[1], 1)
 
             vp_error_np = self.ds[DataVars.VP_ERROR].values
             masked_np = np.ma.masked_equal(vp_error_np, DataVars.MISSING_VALUE, copy=False)
@@ -471,7 +481,7 @@ class ItsLiveReproject:
             # Rotate stable_shift_* and vx_error_*/vy_error_* attributes of vx and vy
             self.rotate_velocity_attributes(
                 reproject_ds,
-                self.transformation_matrix[mid_y_index, mid_x_index],
+                avg_rotation_mat,
                 DataVars.VXP,
                 DataVars.VYP
             )
@@ -603,6 +613,11 @@ class ItsLiveReproject:
             ):
             vx_var_name = vx_var + var_postfix
             vy_var_name = vy_var + var_postfix
+
+            if vx_var_name not in self.ds[vx_var].attrs:
+                # Attribute does not exist
+                continue
+
             vx_error = float(self.ds[vx_var].attrs[vx_var_name])
             vy_error = float(self.ds[vy_var].attrs[vy_var_name])
 
@@ -620,6 +635,11 @@ class ItsLiveReproject:
         # that corresponds to the center of the grid
         for var in (DataVars.STABLE_SHIFT, DataVars.STABLE_SHIFT_MASK,
             DataVars.STABLE_SHIFT_SLOW):
+
+            if var not in self.ds[vx_var].attrs:
+                # Attribute does not exist
+                continue
+
             vx_error = float(self.ds[vx_var].attrs[var])
             vy_error = float(self.ds[vy_var].attrs[var])
 
@@ -741,10 +761,10 @@ class ItsLiveReproject:
                     if v_ij_value != DataVars.MISSING_VALUE and v_error_np[v_j, v_i] != DataVars.MISSING_VALUE:
                         v_error[y_index, x_index] = v_error_np[v_j, v_i]*scale_factor
 
-                        # Track large differences in v_error values. If observed,
+                        # Track large differences in v_error values in case they happen. If observed,
                         # most likely need to reduce error threshold for the gdal.warp()
                         if np.abs(v_error[y_index, x_index] - v_error_np[v_j, v_i]) > 100:
-                            self.logger.info(f"Computed {v_var}_error={v_error[y_index, x_index]}: v_error_old={v_error_np[v_j, v_i]}")
+                            self.logger.warning(f"Computed {v_var}_error={v_error[y_index, x_index]}: {v_var}_error_old={v_error_np[v_j, v_i]}")
                             self.logger.info(f"--->indices: i={v_i} j={v_j} vs. x={x_index} y={y_index}")
                             self.logger.info(f"--->v:       {v_var}_new={v[y_index, x_index]} {v_var}_old={v_ij_value}")
                             vx_value = self.ds[vx_var].isel(y=v_j, x=v_i).values.item()
@@ -844,12 +864,12 @@ class ItsLiveReproject:
         normal = np.array([0.0, 0.0, 1.0])
 
         # Compute transformation matrix per cell
-        self.transformation_matrix = np.full((num_xy0_points), DataVars.MISSING_VALUE, dtype=np.object)
+        self.transformation_matrix = np.full((num_xy0_points), DataVars.MISSING_VALUE, dtype=object)
         # self.transformation_matrix.fill(DataVars.MISSING_VALUE)
 
         # For each re-projected cell store indices of corresponding cells in
         # original projection
-        self.original_ij_index = np.zeros((num_xy0_points), dtype=np.object)
+        self.original_ij_index = np.zeros((num_xy0_points), dtype=object)
 
         # Counter of how many points don't have transformation matrix
         no_value_counter = 0
