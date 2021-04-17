@@ -9,7 +9,7 @@ $ python reproject.py -i input_filename -p target_projection -o output_filename
 
 $ python ./reproject.py -i  LC08_L1TP_042242_20180721_20180731_01_T1_X_LC08_L1TP_042242_20170702_20170702_01_RT_G0240V01_P065.nc -o reproject_P065.nc -p 32627
 
-$ python ./reproject.py -i S1A_IW_SLC__1SSH_20170221T204710_20170221T204737_015387_0193F6_AB07_X_S1B_IW_SLC__1SSH_20170227T204628_20170227T204655_004491_007D11_6654_G0240V02_P945.nc -o reproject_radar.nc -p 32623
+$ python ./reproject.py -i S1A_IW_SLC__1SSH_20170221T204710_20170221T204737_015387_0193F6_AB07_X_S1B_IW_SLC__1SSH_20170227T204628_20170227T204655_004491_007D11_6654_G0240V02_P094.nc -o reproject_radar.nc -p 32623
 
 $ python ./reproject.py -i optical-updated/LC08_L1TP_009011_20200617_20200626_01_T1__X_LC08_L1TP_009011_20200703_20200708_01_T1__G0240V02_P071.nc -o reproject_optical_updated_P071.nc -p 32623
 """
@@ -609,8 +609,8 @@ class ItsLiveReproject:
         Rotate stable_shift_* and vx_error_*/vy_error_* attributes for
         corresponding data variables.
         """
-        # Rotate x and y components of the same attribute by transformation matrix
-        # that corresponds to the center of the grid
+        # Rotate x and y components of the same attribute by average over all
+        # cells transformation matrix
         for var_postfix in ('_error_mask', '_error_slow', '_error_modeled',
             ):
             vx_var_name = vx_var + var_postfix
@@ -633,8 +633,8 @@ class ItsLiveReproject:
             reproject_ds[vx_var].attrs[vx_var_name] = round(error[0], 1)
             reproject_ds[vy_var].attrs[vy_var_name] = round(error[1], 1)
 
-        # Rotate x and y components of the same attribute by transformation matrix
-        # that corresponds to the center of the grid
+        # Rotate x and y components of the same attribute by average over all
+        # cells transformation matrix
         for var in (DataVars.STABLE_SHIFT, DataVars.STABLE_SHIFT_MASK,
             DataVars.STABLE_SHIFT_SLOW):
 
