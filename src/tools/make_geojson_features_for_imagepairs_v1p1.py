@@ -283,6 +283,7 @@ if args.stop_chunks_at_file != 0:
 
 # Use sub-directory name of input path as base for output filename
 base_dir = os.path.basename(inzonesdir)
+s3_out = s3fs.S3FileSystem()
 
 for num,(start,stop) in enumerate(chunks_startstop):
     print(f'working on chunk {start},{stop}', flush = True)
@@ -300,7 +301,8 @@ for num,(start,stop) in enumerate(chunks_startstop):
 
     featureColl = geojson.FeatureCollection(featurelist)
     outfilename = f'imgpr_{base_dir}_{start:06d}_{stop:06d}.json'
-    with s3.open(f'{args.S3_output_directory}/{outfilename}','w') as outf:
+
+    with s3_out.open(f'{args.S3_output_directory}/{outfilename}','w') as outf:
         geojson.dump(featureColl,outf)
 
     mt.meminfo(f'wrote {args.S3_output_directory}/{outfilename}')
