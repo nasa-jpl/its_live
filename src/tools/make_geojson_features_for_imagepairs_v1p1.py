@@ -4,11 +4,9 @@ import geojson
 import h5py
 import pyproj
 import s3fs
-
+import os
 import json
-
 import sys
-
 import psutil
 import time
 
@@ -59,13 +57,10 @@ def finddirstring(lat,lon):
     dirstring = f'{NShemi_str}{outlat:02d}{EWhemi_str}{outlon:03d}'
     return(dirstring)
 
-
-
-
-
-def image_pair_feature_from_path(infilewithpath, proj_epsg, five_points_per_side = False):
+def image_pair_feature_from_path(infilewithpath, five_points_per_side = False):
     # from s3.ls:
     #     infilewithpath = 'https://s3/its-live-data.jpl.nasa.gov/velocity_image_pair/landsat/v00.0/32609/LC08_L1TP_050024_20180713_20180730_01_T1_X_LE07_L1TP_050024_20180315_20180316_01_RT_G0240V01_P072.nc'
+
 
     # base URL from S3 directory listing has file path for s3fs access, not what you need for http directly,
     #  so that is hard coded here. (or not used - don't need it in every feature)
@@ -84,10 +79,8 @@ def image_pair_feature_from_path(infilewithpath, proj_epsg, five_points_per_side
         xvals = np.array(inh5.get('x'))
         yvals = np.array(inh5.get('y'))
 
-        if proj_epsg == '3031' or proj_epsg == '3413':
-            projection_cf = inh5['Polar_Stereographic']
-        else:
-            projection_cf = inh5['UTM_Projection']
+        # Extract projection variable
+        projection_cf = inh5['UTM_Projection'] if 'UTM_Projection' in inh5 else inh5['Polar_Stereographic']
 
         imginfo_attrs = inh5['img_pair_info'].attrs
         # turn hdf5 img_pair_info attrs into a python dict to save below
@@ -196,11 +189,6 @@ parser = argparse.ArgumentParser( \
     epilog='',
     formatter_class=argparse.RawDescriptionHelpFormatter)
 
-parser.add_argument('epsg_zone',
-                    action='store',
-                    type=str,
-                    help='epsg code for (utm or PS) zone to catalog [e.g. 32606]')
-
 parser.add_argument('-base_dir_s3fs',
                     action='store',
                     type=str,
@@ -210,7 +198,7 @@ parser.add_argument('-base_dir_s3fs',
 parser.add_argument('-S3_output_directory',
                     action='store',
                     type=str,
-                    default='glaciertools.net/imgprfeatcolls',
+                    default='its-live-data.jpl.nasa.gov/test_geojson_catalog',
                     help='output path for featurecollections [%(default)s]')
 
 parser.add_argument('-read_filelist_from_S3_file',
@@ -243,7 +231,6 @@ args = parser.parse_args()
 
 
 inzonesdir = args.base_dir_s3fs
-inzone = args.epsg_zone
 
 if args.read_filelist_from_S3_file:
     # read in infiles from S3 file
@@ -251,7 +238,7 @@ if args.read_filelist_from_S3_file:
         infilelist = json.load(ins3file)
 else:
     # use a glob to list directory
-    infilelist = s3.glob(f'{inzonesdir}/{inzone}/*.nc')
+    infilelist = s3.glob(f'{inzonesdir}/*.nc')
 
 # check for '_P' in filename - filters out temp.nc files that can be left by bad transfers
 # also skips txt file placeholders for 000 Pct (all invalid) pairs
@@ -259,14 +246,14 @@ infiles = [x for x in infilelist if '_P' in x and 'txt' not in x]
 
 totalnumfiles = len(infiles)
 
-mt.meminfo(f'working on {totalnumfiles} total files from {inzonesdir}/{inzone}')
+mt.meminfo(f'working on {totalnumfiles} total files from {inzonesdir}')
 
 
 # set up tuples of start,stop indicies in file list for chunk processing
 numout_featuresets = np.round(totalnumfiles/args.chunk_by).astype('int')
 if numout_featuresets == 0:
     if totalnumfiles == 0:
-        print(f'No files found for {inzonesdir}/{inzone}, exiting...')
+        print(f'No files found for {inzonesdir}, exiting...')
         sys.exit(0)
     else:
         chunks_startstop = [(0, totalnumfiles-1)]
@@ -294,7 +281,8 @@ if args.stop_chunks_at_file != 0:
         print(f'-stop_chunks_at_file {args.stop_chunks_at_file} not in {chunks_startstop}, quitting...')
         sys.exit(0)
 
-
+# Use sub-directory name of input path as base for output filename
+base_dir = os.path.basename(inzonesdir)
 
 for num,(start,stop) in enumerate(chunks_startstop):
     print(f'working on chunk {start},{stop}', flush = True)
@@ -307,14 +295,12 @@ for num,(start,stop) in enumerate(chunks_startstop):
                 mt.meminfo(f'{count:6d}/{stop:6d}')
             else:
                 print(f'{count:6d}/{stop:6d}', end = '\r', flush = True)
-        feature = image_pair_feature_from_path(infilewithpath, inzone, five_points_per_side = True)
+        feature = image_pair_feature_from_path(infilewithpath, five_points_per_side = True)
         featurelist.append(feature)
 
     featureColl = geojson.FeatureCollection(featurelist)
-    outfilename = f'imgpr_{inzone}_{start:06d}_{stop:06d}.json'
-    # with s3.open(f'{args.S3_output_directory}/{outfilename}','w') as outf:
-    # ML: write to local file for now
-    with open(outfilename,'w') as outf:
+    outfilename = f'imgpr_{base_dir}_{start:06d}_{stop:06d}.json'
+    with s3.open(f'{args.S3_output_directory}/{outfilename}','w') as outf:
         geojson.dump(featureColl,outf)
 
     mt.meminfo(f'wrote {args.S3_output_directory}/{outfilename}')
