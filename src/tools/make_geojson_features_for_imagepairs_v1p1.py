@@ -1,14 +1,27 @@
 import numpy as np
 import argparse
+from datetime import datetime
 import geojson
 import h5py
+import json
+import os
+import psutil
 import pyproj
 import s3fs
-import os
-import json
 import sys
-import psutil
 import time
+from tqdm import tqdm
+
+# Date format as it appears in granules filenames:
+# (LC08_L1TP_011002_20150821_20170405_01_T1_X_LC08_L1TP_011002_20150720_20170406_01_T1_G0240V01_P038.nc)
+DATE_FORMAT = "%Y%m%d"
+
+# File to store ignored duplicate granules
+duplicate_granules_file = 'ignored_duplicate_granules.txt'
+
+# Lock file used to prevent multiple processes writing to the same file
+lock_file = duplicate_granules_file + '.lock'
+
 
 class memtracker:
 
@@ -35,7 +48,7 @@ class memtracker:
 mt = memtracker()
 
 s3 = s3fs.S3FileSystem(anon=True)
-
+s3_out = s3fs.S3FileSystem()
 
 # returns a string (N78W124) for directory name based on granule centerpoint lat,lon
 #  !!!! Not implemented in geojson code yet !!! <- remove this line when it is.
@@ -174,19 +187,138 @@ def image_pair_feature_from_path(infilewithpath, five_points_per_side = False):
                             )
     return(feat)
 
+def get_tokens_from_filename(filename):
+    """
+    Extract acquisition/processing dates and path/row for two images from the
+    granule filename.
+    """
+    # Get acquisition and processing date for both images from url and index_url
+    url_tokens = os.path.basename(filename).split('_')
+    url_acq_date_1 = datetime.strptime(url_tokens[3], DATE_FORMAT)
+    url_proc_date_1 = datetime.strptime(url_tokens[4], DATE_FORMAT)
+    url_path_row_1 = url_tokens[2]
+    url_acq_date_2 = datetime.strptime(url_tokens[11], DATE_FORMAT)
+    url_proc_date_2 = datetime.strptime(url_tokens[12], DATE_FORMAT)
+    url_path_row_2 = url_tokens[10]
 
+    return url_acq_date_1, url_proc_date_1, url_path_row_1, url_acq_date_2, url_proc_date_2, url_path_row_2
 
+def skip_duplicate_granules(found_urls: list, skipped_granules_filename: str):
+    """
+    Skip duplicate granules (the ones that have earlier processing date(s)).
+    """
+    # Need to remove duplicate granules for the middle date: some granules
+    # have newer processing date, keep those.
+    keep_urls = {}
+    skipped_double_granules = []
+
+    for each_url in tqdm(found_urls, ascii=True, desc='Skipping duplicate granules...'):
+        # Extract acquisition and processing dates
+        url_acq_1, url_proc_1, path_row_1, url_acq_2, url_proc_2, path_row_2 = \
+            get_tokens_from_filename(each_url)
+
+        # Acquisition time and path/row of both images should be identical
+        granule_id = '_'.join([
+            url_acq_1.strftime(DATE_FORMAT),
+            path_row_1,
+            url_acq_2.strftime(DATE_FORMAT),
+            path_row_2
+        ])
+
+        # There is a granule for the mid_date already, check which processing
+        # time is newer, keep the one with newer processing date
+        if granule_id in keep_urls:
+            # Flag if newly found URL should be kept
+            keep_found_url = False
+
+            for found_url in keep_urls[granule_id]:
+                # Check already found URLs for processing time
+                _, found_proc_1, _, _, found_proc_2, _ = \
+                    get_tokens_from_filename(found_url)
+
+                # If both granules have identical processing time,
+                # keep them both - granules might be in different projections,
+                # any other than target projection will be handled later
+                if url_proc_1 == found_proc_1 and \
+                   url_proc_2 == found_proc_2:
+                    keep_urls[granule_id].append(each_url)
+                    keep_found_url = True
+                    break
+
+            # There are no "identical" (same acquision and processing times)
+            # granules to "each_url", check if new granule has newer processing dates
+            if not keep_found_url:
+                # Check if any of the found URLs have older processing time
+                # than newly found URL
+                remove_urls = []
+                for found_url in keep_urls[granule_id]:
+                    # Check already found URL for processing time
+                    _, found_proc_1, _, _, found_proc_2, _ = \
+                        get_tokens_from_filename(found_url)
+
+                    if url_proc_1 >= found_proc_1 and \
+                       url_proc_2 >= found_proc_2:
+                        # The granule will need to be replaced with a newer
+                        # processed one
+                        remove_urls.append(found_url)
+
+                    elif url_proc_1 > found_proc_1:
+                        # There are few cases when proc_1 is newer in
+                        # each_url and proc_2 is newer in found_url, then
+                        # keep the granule with newer proc_1
+                        remove_urls.append(found_url)
+
+                if len(remove_urls):
+                    # Some of the URLs need to be removed due to newer
+                    # processed granule
+                    print(f"Skipping {remove_urls} in favor of new {each_url}")
+                    skipped_double_granules.extend(remove_urls)
+
+                    # Remove older processed granules based on dates for "each_url"
+                    keep_urls[granule_id][:] = [each for each in keep_urls[granule_id] if each not in remove_urls]
+                    # Add new granule with newer processing date
+                    keep_urls[granule_id].append(each_url)
+
+                else:
+                    # New granule has older processing date, don't include
+                    print(f"Skipping new {each_url} in favor of {keep_urls[granule_id]}")
+                    skipped_double_granules.append(each_url)
+
+        else:
+            # This is a granule for new ID, append it to URLs to keep
+            keep_urls.setdefault(granule_id, []).append(each_url)
+
+    granules = []
+    for each in keep_urls.values():
+        granules.extend(each)
+
+    print(f"Keeping {len(granules)} unique granules")
+
+    with s3_out.open(skipped_granules_filename, 'w') as outf:
+        geojson.dump(skipped_double_granules, outf)
+
+    # with open(skipped_granules_filename, 'w') as out_fhandle:
+    #     for each_granule in skipped_double_granules:
+    #         out_fhandle.write(each_granule+os.linesep)
+    #
+    print(f"Wrote skipped granules to '{skipped_granules_filename}'")
+    return granules
 
 
 parser = argparse.ArgumentParser( \
     description="""make_geojson_features_for_imagepairs_v1.py
 
-                    produces output geojson FeatureCollection for each nn image_pairs from a zone.
-                    v1 adds 5 points per side to geom (so 3 interior and the two corners from v0)
-                    and the ability to stop the chunks (in addition to the start allowed in v0)
-                    so that the code can be run on a range of chunks.
-                    """,
-    epilog='',
+                   produces output geojson FeatureCollection for each nn image_pairs from a directory.
+                   v1 adds 5 points per side to geom (so 3 interior and the two corners from v0)
+                   and the ability to stop the chunks (in addition to the start allowed in v0)
+                   so that the code can be run on a range of chunks.
+                """,
+    epilog="""
+There are two steps to create geojson catalogs:
+1. Create a list of granules to be used for catalog generation. The file that stores
+   URLs of such granules is placed in the destination S3 bucket.
+2. Create geojson catalogs using a list of granules as generated by step #1. The list of
+   granules is read from the file stored in the destination S3 bucket.""",
     formatter_class=argparse.RawDescriptionHelpFormatter)
 
 parser.add_argument('-base_dir_s3fs',
@@ -201,53 +333,77 @@ parser.add_argument('-S3_output_directory',
                     default='its-live-data.jpl.nasa.gov/test_geojson_catalog',
                     help='output path for featurecollections [%(default)s]')
 
-parser.add_argument('-read_filelist_from_S3_file',
-                    action='store',
-                    type=str,
-                    default=None,
-                    help='get input file list from S3 file here: [None]')
-
-parser.add_argument('-base_download_URL',
-                    action='store',
-                    type=str,
-                    default='http://its-live-data.jpl.nasa.gov.s3.amazonaws.com/velocity_image_pair/landsat/v00.0',
-                    help='URL base for download of image pair - need zone(directory) and filename as well [%(default)s]')
 parser.add_argument('-chunk_by',
                     action='store',
                     type=int,
                     default=20000,
                     help='chunk feature collections to have chunk_by features each [%(default)d]')
+
 parser.add_argument('-start_chunks_at_file',
                     action='store',
                     type=int,
                     default=0,
                     help='start run at chunk that begins at file n [%(default)d]')
+
 parser.add_argument('-stop_chunks_at_file',
                     action='store',
                     type=int,
                     default=0,
                     help='stop run just befor chunk that begins at file n [%(default)d]')
-args = parser.parse_args()
 
+parser.add_argument('-skipped_granules_file',
+                    action='store',
+                    type=str,
+                    default='its-live-data.jpl.nasa.gov/test_geojson_catalog/skipped_granules.txt',
+                    help='S3 filename to keep track of skipped duplicate granules [%(default)s]')
+
+parser.add_argument('-catalog_granules_file',
+                    action='store',
+                    type=str,
+                    default='its-live-data.jpl.nasa.gov/test_geojson_catalog/used_granules.txt',
+                    help='S3 filename to keep track of granules used for the geojson catalog [%(default)s]')
+
+parser.add_argument('-c', '--create_catalog_list',
+                    action='store_true',
+                    help='build a list of granules for catalog generation [%(default)s], otherwise read the list of granules from catalog_granules_file file')
+
+args = parser.parse_args()
 
 inzonesdir = args.base_dir_s3fs
 
-if args.read_filelist_from_S3_file:
+if not args.create_catalog_list:
     # read in infiles from S3 file
-    with s3.open(args.read_filelist_from_S3_file,'r') as ins3file:
-        infilelist = json.load(ins3file)
+    with s3.open(args.catalog_granules_file, 'r') as ins3file:
+        infiles = json.load(ins3file)
+
+    print(f"Loaded granule list from '{args.catalog_granules_file}'")
+
 else:
     # use a glob to list directory
     infilelist = s3.glob(f'{inzonesdir}/*.nc')
 
-# check for '_P' in filename - filters out temp.nc files that can be left by bad transfers
-# also skips txt file placeholders for 000 Pct (all invalid) pairs
-infiles = [x for x in infilelist if '_P' in x and 'txt' not in x]
+    # check for '_P' in filename - filters out temp.nc files that can be left by bad transfers
+    # also skips txt file placeholders for 000 Pct (all invalid) pairs
+    infiles = [x for x in infilelist if '_P' in x and 'txt' not in x]
+
+    # Skip duplicate granules (the same middle date, but different processing date)
+    infiles = skip_duplicate_granules(infiles, args.skipped_granules_file)
+
+    # Write all unique granules to the file (TODO: for future use to be split
+    # b/w multiple processes)
+    with s3_out.open(args.catalog_granules_file, 'w') as outf:
+        geojson.dump(infiles, outf)
+
+    # with open(args.catalog_granules_file, 'w') as out_fhandle:
+    #     for each_granule in infiles:
+    #         out_fhandle.write(each_granule+os.linesep)
+
+    print(f"Wrote catalog granules to '{args.catalog_granules_file}'")
+    sys.exit(0)
 
 totalnumfiles = len(infiles)
 
 mt.meminfo(f'working on {totalnumfiles} total files from {inzonesdir}')
-
 
 # set up tuples of start,stop indicies in file list for chunk processing
 numout_featuresets = np.round(totalnumfiles/args.chunk_by).astype('int')
@@ -283,7 +439,6 @@ if args.stop_chunks_at_file != 0:
 
 # Use sub-directory name of input path as base for output filename
 base_dir = os.path.basename(inzonesdir)
-s3_out = s3fs.S3FileSystem()
 
 for num,(start,stop) in enumerate(chunks_startstop):
     print(f'working on chunk {start},{stop}', flush = True)
