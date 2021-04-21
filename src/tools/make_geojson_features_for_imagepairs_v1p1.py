@@ -12,9 +12,13 @@ import sys
 import time
 from tqdm import tqdm
 
-# Date format as it appears in granules filenames:
-# (LC08_L1TP_011002_20150821_20170405_01_T1_X_LC08_L1TP_011002_20150720_20170406_01_T1_G0240V01_P038.nc)
+# Date format as it appears in granules filenames of optical format:
+# LC08_L1TP_011002_20150821_20170405_01_T1_X_LC08_L1TP_011002_20150720_20170406_01_T1_G0240V01_P038.nc
 DATE_FORMAT = "%Y%m%d"
+
+# Date and time format as it appears in granules filenames or radar format:
+# S1A_IW_SLC__1SSH_20170221T204710_20170221T204737_015387_0193F6_AB07_X_S1B_IW_SLC__1SSH_20170227T204628_20170227T204655_004491_007D11_6654_G0240V02_P094.nc
+DATE_TIME_FORMAT = "%Y%m%dT%H%M%S"
 
 # File to store ignored duplicate granules
 duplicate_granules_file = 'ignored_duplicate_granules.txt'
@@ -192,16 +196,50 @@ def get_tokens_from_filename(filename):
     Extract acquisition/processing dates and path/row for two images from the
     granule filename.
     """
-    # Get acquisition and processing date for both images from url and index_url
-    url_tokens = os.path.basename(filename).split('_')
-    url_acq_date_1 = datetime.strptime(url_tokens[3], DATE_FORMAT)
-    url_proc_date_1 = datetime.strptime(url_tokens[4], DATE_FORMAT)
-    url_path_row_1 = url_tokens[2]
-    url_acq_date_2 = datetime.strptime(url_tokens[11], DATE_FORMAT)
-    url_proc_date_2 = datetime.strptime(url_tokens[12], DATE_FORMAT)
-    url_path_row_2 = url_tokens[10]
+    # Optical format granules have different file naming convention than radar
+    # format granules
+    is_optical = True
+    url_files = os.path.basename(filename).split('_X_')
 
-    return url_acq_date_1, url_proc_date_1, url_path_row_1, url_acq_date_2, url_proc_date_2, url_path_row_2
+    # Get tokens for the first image name
+    url_tokens = url_files[0].split('_')
+
+    if len(url_tokens) < 9:
+        # Optical format granule
+        # Get acquisition/processing dates and path&row for both images
+        first_date_1 = datetime.strptime(url_tokens[3], DATE_FORMAT)
+        second_date_1 = datetime.strptime(url_tokens[4], DATE_FORMAT)
+        key_1 = url_tokens[2]
+
+        url_tokens = url_files[1].split('_')
+        first_date_2 = datetime.strptime(url_tokens[3], DATE_FORMAT)
+        second_date_2 = datetime.strptime(url_tokens[4], DATE_FORMAT)
+        key_2 = url_tokens[2]
+
+    else:
+        # Radar format granule
+        # Get start/end date/time and product unique ID for both images
+        is_optical = False
+
+        url_tokens = url_files[0].split('_')
+        # Start date and time
+        first_date_1 = datetime.strptime(url_tokens[-5], DATE_TIME_FORMAT)
+        # Stop date and time
+        second_date_1 = datetime.strptime(url_tokens[-4], DATE_TIME_FORMAT)
+        # Product unique identifier
+        key_1 = url_tokens[-1]
+
+        # Get tokens for the second image name: there are two extra tokens
+        # at the end of the filename which are specific to ITS_LIVE filename
+        url_tokens = url_files[1].split('_')
+        # Start date and time
+        first_date_2 = datetime.strptime(url_tokens[-7], DATE_TIME_FORMAT)
+        # Stop date and time
+        second_date_2 = datetime.strptime(url_tokens[-6], DATE_TIME_FORMAT)
+        # Product unique identifier
+        key_2 = url_tokens[-3]
+
+    return is_optical, first_date_1, second_date_1, key_1, first_date_2, second_date_2, key_2
 
 def skip_duplicate_granules(found_urls: list, skipped_granules_filename: str):
     """
@@ -213,27 +251,49 @@ def skip_duplicate_granules(found_urls: list, skipped_granules_filename: str):
     skipped_double_granules = []
 
     for each_url in tqdm(found_urls, ascii=True, desc='Skipping duplicate granules...'):
-        # Extract acquisition and processing dates
-        url_acq_1, url_proc_1, path_row_1, url_acq_2, url_proc_2, path_row_2 = \
+        # Extract acquisition and processing dates for optical granule,
+        # start/end date/time and product unique ID for radar granule
+        is_optical, url_acq_1, url_proc_1, key_1, url_acq_2, url_proc_2, key_2 = \
             get_tokens_from_filename(each_url)
 
-        # Acquisition time and path/row of both images should be identical
-        granule_id = '_'.join([
-            url_acq_1.strftime(DATE_FORMAT),
-            path_row_1,
-            url_acq_2.strftime(DATE_FORMAT),
-            path_row_2
-        ])
+        if is_optical:
+            # Acquisition time and path/row of images should be identical for
+            # duplicate granules
+            granule_id = '_'.join([
+                url_acq_1.strftime(DATE_FORMAT),
+                key_1,
+                url_acq_2.strftime(DATE_FORMAT),
+                key_2
+            ])
 
-        # There is a granule for the mid_date already, check which processing
-        # time is newer, keep the one with newer processing date
+        else:
+            # Start/stop date/time of both images
+            granule_id = '_'.join([
+                url_acq_1.strftime(DATE_TIME_FORMAT),
+                url_proc_1.strftime(DATE_TIME_FORMAT),
+                url_acq_2.strftime(DATE_TIME_FORMAT),
+                url_proc_2.strftime(DATE_TIME_FORMAT),
+            ])
+
+        # There is a granule for the mid_date already:
+        # * For radar granule: issue a warning reporting product unique ID for duplicate granules
+        # * For optical granule: check which processing time is newer,
+        #                        keep the one with newer processing date
         if granule_id in keep_urls:
+            if not is_optical:
+                # Radar format granule, just issue a warning
+                all_urls = ' '.join(keep_urls[granule_id])
+                print(f"WARNING: multiple granules are detected for {each_url}: {all_urls}")
+                keep_urls[granule_id].append(each_url)
+                continue
+
+            # Process optical granule
             # Flag if newly found URL should be kept
             keep_found_url = False
 
             for found_url in keep_urls[granule_id]:
                 # Check already found URLs for processing time
-                _, found_proc_1, _, _, found_proc_2, _ = \
+                _, _, found_proc_1, _, _, found_proc_2, _ = \
                     get_tokens_from_filename(found_url)
 
                 # If both granules have identical processing time,
@@ -253,7 +313,7 @@ def skip_duplicate_granules(found_urls: list, skipped_granules_filename: str):
                 remove_urls = []
                 for found_url in keep_urls[granule_id]:
                     # Check already found URL for processing time
-                    _, found_proc_1, _, _, found_proc_2, _ = \
+                    _, _, found_proc_1, _, _, found_proc_2, _ = \
                         get_tokens_from_filename(found_url)
 
                     if url_proc_1 >= found_proc_1 and \
@@ -393,10 +453,6 @@ else:
     # b/w multiple processes)
     with s3_out.open(args.catalog_granules_file, 'w') as outf:
         geojson.dump(infiles, outf)
-
-    # with open(args.catalog_granules_file, 'w') as out_fhandle:
-    #     for each_granule in infiles:
-    #         out_fhandle.write(each_granule+os.linesep)
 
     print(f"Wrote catalog granules to '{args.catalog_granules_file}'")
     sys.exit(0)
