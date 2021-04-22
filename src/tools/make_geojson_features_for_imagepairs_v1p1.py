@@ -428,6 +428,13 @@ parser.add_argument('-c', '--create_catalog_list',
                     action='store_true',
                     help='build a list of granules for catalog generation [%(default)s], otherwise read the list of granules from catalog_granules_file file')
 
+parser.add_argument('-glob',
+                    action='store',
+                    type=str,
+                    default='*.nc',
+                    help='glob pattern for the granule search under "base_dir_s3fs" [%(default)s]')
+
+
 args = parser.parse_args()
 
 inzonesdir = args.base_dir_s3fs
@@ -441,7 +448,7 @@ if not args.create_catalog_list:
 
 else:
     # use a glob to list directory
-    infilelist = s3.glob(f'{inzonesdir}/*.nc')
+    infilelist = s3.glob(f'{inzonesdir}/{args.glob}')
 
     # check for '_P' in filename - filters out temp.nc files that can be left by bad transfers
     # also skips txt file placeholders for 000 Pct (all invalid) pairs
