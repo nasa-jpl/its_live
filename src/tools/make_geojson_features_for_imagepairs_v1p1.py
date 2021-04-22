@@ -194,7 +194,8 @@ def image_pair_feature_from_path(infilewithpath, five_points_per_side = False):
 def get_tokens_from_filename(filename):
     """
     Extract acquisition/processing dates and path/row for two images from the
-    granule filename.
+    optical granule filename, or start/end date/time and product unique ID for
+    radar granule filename.
     """
     # Optical format granules have different file naming convention than radar
     # format granules
@@ -390,7 +391,7 @@ parser.add_argument('-base_dir_s3fs',
 parser.add_argument('-S3_output_directory',
                     action='store',
                     type=str,
-                    default='its-live-data.jpl.nasa.gov/test_geojson_catalog',
+                    default='its-live-data.jpl.nasa.gov/test_catalog_geojson',
                     help='output path for featurecollections [%(default)s]')
 
 parser.add_argument('-chunk_by',
@@ -414,13 +415,13 @@ parser.add_argument('-stop_chunks_at_file',
 parser.add_argument('-skipped_granules_file',
                     action='store',
                     type=str,
-                    default='its-live-data.jpl.nasa.gov/test_geojson_catalog/skipped_granules.txt',
+                    default='its-live-data.jpl.nasa.gov/test_catalog_geojson/skipped_granules.txt',
                     help='S3 filename to keep track of skipped duplicate granules [%(default)s]')
 
 parser.add_argument('-catalog_granules_file',
                     action='store',
                     type=str,
-                    default='its-live-data.jpl.nasa.gov/test_geojson_catalog/used_granules.txt',
+                    default='its-live-data.jpl.nasa.gov/test_catalog_geojson/used_granules.txt',
                     help='S3 filename to keep track of granules used for the geojson catalog [%(default)s]')
 
 parser.add_argument('-c', '--create_catalog_list',
