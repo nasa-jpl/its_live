@@ -19,7 +19,6 @@ dependencies:
 - joblib
 - matplotlib-base
 - dask
-#- python-graphviz # Dask visualizer - requires python3.6
 - pandas
 - shapely
 - h5py
@@ -30,16 +29,17 @@ dependencies:
 - netcdf4
 - flake8
 - nodejs
-- jupyterlab
-- jupyter_contrib_nbextensions
-- jupyter_nbextensions_configurator
-- ipyleaflet
+# - jupyterlab
+# - jupyter_contrib_nbextensions
+# - jupyter_nbextensions_configurator
+# - ipyleaflet
 - s3fs
 - tqdm
 - utm
 - zarr
+- gdal
 - pip
-- pip:
-  - area
-  - git+git://github.com/icesat2py/icepyx@development
-  - python-cmr
+# - pip:
+#   - area
+#   - git+git://github.com/icesat2py/icepyx@development
+#   - python-cmr
