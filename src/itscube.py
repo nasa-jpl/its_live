@@ -22,7 +22,7 @@ from tqdm import tqdm
 import xarray as xr
 
 # Local modules
-from itslive import itslive_ui
+import itslive_utils
 from grid import Bounds, Grid
 from itscube_types import Coords, DataVars
 
@@ -104,7 +104,7 @@ class ITSCube:
         self.polygon_coords = []
 
         for each in polygon:
-            coords = itslive_ui.transform_coord(
+            coords = itslive_utils.transform_coord(
                 projection,
                 ITSCube.LON_LAT_PROJECTION,
                 each[0], each[1]
@@ -178,7 +178,7 @@ class ITSCube:
 
         self.logger.info(f"ITS_LIVE search API params: {params}")
         start_time = timeit.default_timer()
-        found_urls = [each['url'] for each in itslive_ui.get_granule_urls(params)]
+        found_urls = [each['url'] for each in itslive_utils.get_granule_urls(params)]
         total_num = len(found_urls)
         time_delta = timeit.default_timer() - start_time
         self.logger.info(f"Number of found by API granules: {total_num} (took {time_delta} seconds)")
