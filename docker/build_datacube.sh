@@ -41,18 +41,12 @@ mkdir -p ${TEMP_STAGING_DIR}/env
 # Copy files to the staging area and build the PGE docker image
 cp -r ${WORKSPACE}/src/itscube_types.py ${WORKSPACE}/src/itscube.py \
       ${WORKSPACE}/src/grid.py ${WORKSPACE}/src/itslive_utils.py \
-      ${WORKSPACE}/environment/cube_environment.yml \
-      ${WORKSPACE}/docker/entrypoint_cube.sh \
       ${WORKSPACE}/LICENSE \
       ${TEMP_STAGING_DIR}/
 
 cp -r ${WORKSPACE}/environment/cube_environment.yml \
       ${WORKSPACE}/docker/entrypoint_cube.sh \
       ${TEMP_STAGING_DIR}/env/
-
-# cp -r ${WORKSPACE}/environment/cube_environment.yml \
-#       ${WORKSPACE}/docker/entrypoint_cube.sh \
-#       ${TEMP_STAGING_DIR}/env/
 
 # Create VERSION file
 printf "build_version: ${TAG}\nbuild_datetime: ${BUILD_DATE_TIME}\n" \
