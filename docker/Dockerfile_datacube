@@ -1,6 +1,5 @@
-# Dockerfile to produce the production ITS_LIVE docker image for datacube
+# Dockerfile to produce production ITS_LIVE Docker image for datacube generation
 
-# FROM centos:8
 FROM continuumio/miniconda3:4.9.2
 
 # Set an encoding to make things work smoothly
@@ -41,13 +40,14 @@ WORKDIR /home/conda
 
 # copy the  software and other files
 COPY --chown=1000:1000 ${SOURCE_DIR} /home/conda/itslive
-#COPY conda-env.yml /home/conda/conda-env.yml
 
-RUN conda env create -f itslive/cube_environment.yml && \
+# build datacube conda environment
+RUN conda env create -f itslive/env/cube_environment.yml && \
     conda clean -afy && \
-    conda activate itscube && \
-    sed -i 's/conda activate base/conda activate itscube/g' /home/conda/.profile
+    conda activate itslivecube && \
+    sed -i 's/conda activate base/conda activate itslivecube/g' /home/conda/.profile
 
 # Set directory and entrypoint
-WORKDIR /home/conda/itslive
-ENTRYPOINT ["/home/conda/itslive/entrypoint_cube.sh"]
+WORKDIR /home/conda
+
+ENTRYPOINT ["/home/conda/itslive/env/entrypoint_cube.sh"]

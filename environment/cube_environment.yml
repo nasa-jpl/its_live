@@ -1,5 +1,5 @@
 #
-# Configuration file to create conda environment to run ITSCube related code.
+# Configuration file to create conda environment to run ItsLiveCube related code.
 #
 # To create conda environment, run command:
 #
@@ -7,20 +7,17 @@
 #
 # Followed by the following command to activate the environment:
 #
-# $ conda activate itscube
+# $ conda activate itslivecube
 #
-name: itscube
+name: itslivecube
 
 channels:
 - conda-forge
 
 dependencies:
 - python=3.8
-- joblib
-- matplotlib-base
 - dask
 - pandas
-- shapely
 - h5py
 - h5netcdf
 - requests
@@ -28,18 +25,7 @@ dependencies:
 - xarray
 - netcdf4
 - flake8
-- nodejs
-# - jupyterlab
-# - jupyter_contrib_nbextensions
-# - jupyter_nbextensions_configurator
-# - ipyleaflet
 - s3fs
 - tqdm
 - utm
 - zarr
-- gdal
-- pip
-# - pip:
-#   - area
-#   - git+git://github.com/icesat2py/icepyx@development
-#   - python-cmr
