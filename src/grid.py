@@ -1,3 +1,4 @@
+import math
 import numpy as np
 
 
@@ -24,6 +25,16 @@ class Bounds:
         String representation of the object.
         """
         return f"min={self.min} max={self.max}"
+
+    def extend_to_grid(self, resolution):
+        """
+        Round down minimums and up maximums to the nearest resolution in m.
+        Returns new Bounds object.
+        """
+        return Bounds(
+            min_value = math.floor(self.min/resolution)*resolution,
+            max_value = math.ceil(self.max/resolution)*resolution
+        )
 
 
 class Grid:
