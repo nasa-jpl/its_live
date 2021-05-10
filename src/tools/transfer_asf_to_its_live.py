@@ -9,6 +9,7 @@ echo 'machine urs.earthdata.nasa.gov login USERNAME password PASSWORD' >& ~/.net
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 
 import boto3
@@ -21,45 +22,43 @@ import numpy as np
 
 HYP3_AUTORIFT_API = 'https://hyp3-autorift.asf.alaska.edu'
 
-# # Author: Mark Fahnestock
-# def point_to_prefix(lat: float, lon: float) -> str:
-#     """
-#     Returns a string (for example, N78W124) for directory name based on
-#     granule centerpoint lat,lon
-#     """
-#     NShemi_str = 'N' if lat >= 0.0 else 'S'
-#     EWhemi_str = 'E' if lon >= 0.0 else 'W'
 #
-#     outlat = int(10*np.trunc(np.abs(lat/10.0)))
-#     if outlat == 90: # if you are exactly at a pole, put in lat = 80 bin
-#         outlat = 80
+# Author: Mark Fahnestock
 #
-#     outlon = int(10*np.trunc(np.abs(lon/10.0)))
-#
-#     if outlon >= 180: # if you are at the dateline, back off to the 170 bin
-#         outlon = 170
-#
-#     dirstring = f'{NShemi_str}{outlat:02d}{EWhemi_str}{outlon:03d}'
-#     return dirstring
+def point_to_prefix(dir_path: str, lat: float, lon: float) -> str:
+    """
+    Returns a string (for example, N78W124) for directory name based on
+    granule centerpoint lat,lon
+    """
+    NShemi_str = 'N' if lat >= 0.0 else 'S'
+    EWhemi_str = 'E' if lon >= 0.0 else 'W'
 
+    outlat = int(10*np.trunc(np.abs(lat/10.0)))
+    if outlat == 90: # if you are exactly at a pole, put in lat = 80 bin
+        outlat = 80
 
-def point_to_prefix(lat: float, lon: float) -> str:
-    # TODO: Convert image center lat, lon to an AWS bucket prefix
-    return 'foobar'
+    outlon = int(10*np.trunc(np.abs(lon/10.0)))
 
+    if outlon >= 180: # if you are at the dateline, back off to the 170 bin
+        outlon = 170
+
+    dirstring = os.path.join(dir_path, f'{NShemi_str}{outlat:02d}{EWhemi_str}{outlon:03d}')
+    return dirstring
 
 def object_exists(bucket, key: str) -> bool:
     try:
         bucket.Object(key).load()
+
     except ClientError:
         return False
-    return True
 
+    return True
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('-j', '--job-ids', type=Path, help='JSON list of HyP3 Job IDs')
     parser.add_argument('-t', '--target-bucket', help='Upload the autoRIFT products to this AWS bucket')
+    parser.add_argument('-d', '--dir', help='Upload the autoRIFT products to this sub-directory of AWS bucket')
     parser.add_argument('-u', '--user', help='Username for https://urs.earthdata.nasa.gov login')
     parser.add_argument('-p', '--password', help='Password for https://urs.earthdata.nasa.gov login')
     args = parser.parse_args()
@@ -88,7 +87,7 @@ def main():
             source = {'Bucket': job.files[0]['s3']['bucket'],
                       'Key': job.files[0]['s3']['key']}
 
-            target_prefix = point_to_prefix(lat, lon)
+            target_prefix = point_to_prefix(args.dir, lat, lon)
             target_key = f'{target_prefix}/{job.files[0]["filename"]}'
 
             if object_exists(target_bucket, target_key):
