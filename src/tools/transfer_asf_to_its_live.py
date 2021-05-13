@@ -51,12 +51,13 @@ def point_to_prefix(dir_path: str, lat: float, lon: float) -> str:
 
 
 class ASFTransfer:
-
+    """
+    Class to handle ITS_LIVE granule transfer from ASF to ITS_LIVE bucket.
+    """
     def __init__(self, user: str, password: str, target_bucket: str, target_dir: str):
         self.hyp3 = sdk.HyP3(HYP3_AUTORIFT_API, user, password)
         self.target_bucket = target_bucket
-        # self.bucket = boto3.resource('s3').Bucket(target_bucket)
-        self.bucket_dir = target_dir
+        self.target_bucket_dir = target_dir
 
     def run(self, job_ids_file: str, chunks_to_copy: int):
         """
@@ -122,7 +123,7 @@ class ASFTransfer:
             source = {'Bucket': job.files[0]['s3']['bucket'],
                       'Key': job.files[0]['s3']['key']}
 
-            target_prefix = point_to_prefix(self.bucket_dir, lat, lon)
+            target_prefix = point_to_prefix(self.target_bucket_dir, lat, lon)
             target_key = f'{target_prefix}/{job.files[0]["filename"]}'
 
             bucket = boto3.resource('s3').Bucket(self.target_bucket)
@@ -133,7 +134,7 @@ class ASFTransfer:
             else:
                 bucket.copy(source, target_key)
                 msgs.append(f'Copying {source["Bucket"]}/{source["Key"]} to {bucket.name}/{target_key}')
-                # Need to copy anything else?
+                # TODO: Need to copy anything else?
 
         else:
             msgs.append(f'WARNING: {job} failed!')
