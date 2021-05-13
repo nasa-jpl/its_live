@@ -20,12 +20,6 @@ DATE_FORMAT = "%Y%m%d"
 # S1A_IW_SLC__1SSH_20170221T204710_20170221T204737_015387_0193F6_AB07_X_S1B_IW_SLC__1SSH_20170227T204628_20170227T204655_004491_007D11_6654_G0240V02_P094.nc
 DATE_TIME_FORMAT = "%Y%m%dT%H%M%S"
 
-# File to store ignored duplicate granules
-duplicate_granules_file = 'ignored_duplicate_granules.txt'
-
-# Lock file used to prevent multiple processes writing to the same file
-lock_file = duplicate_granules_file + '.lock'
-
 
 class memtracker:
 
@@ -385,7 +379,7 @@ There are two steps to create geojson catalogs:
 parser.add_argument('-base_dir_s3fs',
                     action='store',
                     type=str,
-                    default='its-live-data.jpl.nasa.gov/velocity_image_pair/landsat/v00.0',
+                    default='its-live-data.jpl.nasa.gov/velocity_image_pair/landsat/v01.0',
                     help='S3 path to tile catalog directories (not including the EPSG code for zone of tile) [%(default)s]')
 
 parser.add_argument('-S3_output_directory',
@@ -415,13 +409,13 @@ parser.add_argument('-stop_chunks_at_file',
 parser.add_argument('-skipped_granules_file',
                     action='store',
                     type=str,
-                    default='its-live-data.jpl.nasa.gov/test_catalog_geojson/skipped_granules.txt',
+                    default='its-live-data.jpl.nasa.gov/test_catalog_geojson/skipped_granules.json',
                     help='S3 filename to keep track of skipped duplicate granules [%(default)s]')
 
 parser.add_argument('-catalog_granules_file',
                     action='store',
                     type=str,
-                    default='its-live-data.jpl.nasa.gov/test_catalog_geojson/used_granules.txt',
+                    default='its-live-data.jpl.nasa.gov/test_catalog_geojson/used_granules.json',
                     help='S3 filename to keep track of granules used for the geojson catalog [%(default)s]')
 
 parser.add_argument('-c', '--create_catalog_list',
@@ -431,7 +425,7 @@ parser.add_argument('-c', '--create_catalog_list',
 parser.add_argument('-glob',
                     action='store',
                     type=str,
-                    default='*.nc',
+                    default='*/*.nc',
                     help='glob pattern for the granule search under "base_dir_s3fs" [%(default)s]')
 
 
