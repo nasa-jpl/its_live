@@ -328,7 +328,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # Map provided EPSG codes to the list of strings
+    # Map provided EPSG codes to the list of int codes
     epsg_codes = list(map(int, json.loads(args.epsgCode))) if args.epsgCode is not None else None
     logging.info(f"Got EPGS codes: {epsg_codes}")
 
