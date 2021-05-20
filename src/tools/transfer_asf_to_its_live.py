@@ -5,8 +5,8 @@ To run the script you need to have credentials for:
 Place credentials into the file:
 echo 'machine urs.earthdata.nasa.gov login USERNAME password PASSWORD' >& ~/.netrc
 
+Authors: Masha Liukis, Joe Kennedy, Mark Fahnestock
 """
-
 import argparse
 import dask
 from dask.diagnostics import ProgressBar
@@ -120,21 +120,30 @@ class ASFTransfer:
                     lon = ds.img_pair_info.longitude[0]
                     msgs.append(f'Image center (lat, lon): ({lat}, {lon})')
 
-            source = {'Bucket': job.files[0]['s3']['bucket'],
-                      'Key': job.files[0]['s3']['key']}
-
             target_prefix = point_to_prefix(self.target_bucket_dir, lat, lon)
-            target_key = f'{target_prefix}/{job.files[0]["filename"]}'
-
             bucket = boto3.resource('s3').Bucket(self.target_bucket)
+            target = f"{target_prefix}/{job.files[0]['filename']}"
+            source = job.files[0]['s3']['key']
 
-            if self.object_exists(bucket, target_key):
-                msgs.append(f'WARNING: {bucket.name}/{target_key} already exists! skipping {job}')
+            # There are corresponding browse and thumbprint images to transfer
+            for target_ext in [None, '.png', '_thumb.png']:
+                target_key = target
+                source_key = source
 
-            else:
-                bucket.copy(source, target_key)
-                msgs.append(f'Copying {source["Bucket"]}/{source["Key"]} to {bucket.name}/{target_key}')
-                # TODO: Need to copy anything else?
+                # It's an extra file to transfer, replace extension
+                if target_ext is not None:
+                    target_key = target_key.replace('.nc', target_ext)
+                    source_key = source_key.replace('.nc', target_ext)
+
+                if self.object_exists(bucket, target_key):
+                    msgs.append(f'WARNING: {bucket.name}/{target_key} already exists, skipping {job}')
+
+                else:
+                    source_dict = {'Bucket': job.files[0]['s3']['bucket'],
+                                   'Key': source_key}
+
+                    bucket.copy(source_dict, target_key)
+                    msgs.append(f'Copying {source_dict["Bucket"]}/{source_dict["Key"]} to {bucket.name}/{target_key}')
 
         else:
             msgs.append(f'WARNING: {job} failed!')
