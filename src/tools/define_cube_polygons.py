@@ -157,9 +157,8 @@ def define_cubes(shape_filename: str, cube_filename: str, target_epsg_codes: lis
             lat[np.isclose(lat, 90.0)] = 89.999999
 
             # Convert coordinates
-            # epsg_polygon = [pyproj.transform(proj1, proj2, e_lon, e_lat) for e_lon, e_lat in zip(lon, lat)]
             epsg_polygon = [transformer.transform(e_lon, e_lat) for e_lon, e_lat in zip(lon, lat)]
-            logging.info(f"EPGS region: {len(epsg_polygon)}")
+            logging.info(f"EPGS region: {len(epsg_polygon)} points")
 
             # # Convert back to lon/lat to debug coverage
             # debug_lonlat = []
@@ -269,6 +268,12 @@ def define_cubes(shape_filename: str, cube_filename: str, target_epsg_codes: lis
                         # There is no valid cube to record
                         continue
 
+                    # Compute overlap area with original polygon: don't accept cubes
+                    # that overlap for less than 10%
+                    if 100*geometry_obj.intersection(each_polygon).area/geometry_obj.area < 10:
+                        # logging.info(f"Skipping less than 10% coverage datacube: {geometry_obj}")
+                        continue
+
                     # Region Of Interest coverage within the cube
                     roi_coverage = roi_data[min_y_ind:max_y_ind, min_x_ind:max_x_ind].sum()/cube_num_cells
 
@@ -320,7 +325,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('-s', '--shapeFile', type=str, default='/Users/mliukis/Documents/ITS_LIVE/fromAlex/autorift_landice_0120m/autorift_landice_0120m.shp',
-                        help='Regional shape file that defines each of the EPSG polygons.')
+                        help='Regional shape file that defines each of the EPSG polygons in longitude/latitude coordinates.')
     parser.add_argument('-o', '--outputFile', type=str, default='cubeGrid.json',
                         help='Geojson file to store cube polygon definitions.')
     parser.add_argument('-c', '--epsgCode', type=str, default=None,
