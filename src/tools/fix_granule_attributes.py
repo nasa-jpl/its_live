@@ -3,6 +3,10 @@
 Fix attributes of ITS_LIVE granules with information that was not available
 during granule production.
 
+ATTN: This script should run from AWS EC2 instance to have fast access to the S3
+bucket. It takes 2 seconds to upload the file to the S3 bucket from EC2 instance
+vs. 1.5 minutes to upload the file from laptop to the S3 bucket.
+
 Authors: Masha Liukis, Joe Kennedy
 """
 import argparse
@@ -111,6 +115,9 @@ class FixGranulesAttributes:
 
         start = 0
         logging.info(f"{num_to_fix} granules to fix...")
+
+        if not os.path.exists(local_dir):
+            os.mkdir(local_dir)
 
         while num_to_fix > 0:
             num_tasks = chunk_size if num_to_fix > chunk_size else num_to_fix
