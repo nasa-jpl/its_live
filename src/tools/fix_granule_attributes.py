@@ -102,7 +102,7 @@ class FixGranulesAttributes:
 
         self.bucket = bucket
 
-    def dont__call__(self, local_dir: str, chunk_size: int):
+    def __call__(self, local_dir: str, chunk_size: int):
         """
         Fix acquisition date and time attributes of ITS_LIVE granules stored
         in the bucket.
@@ -125,14 +125,13 @@ class FixGranulesAttributes:
                                        scheduler="processes",
                                        num_workers=8)
 
-            # logging.info(f"Results: {results}")
             for each_result in results[0]:
                 logging.info("-->".join(each_result))
 
             num_to_fix -= num_tasks
             start += num_tasks
 
-    def __call__(self, local_dir: str, chunk_size: int):
+    def dont__call__(self, local_dir: str, chunk_size: int):
         """
         Fix acquisition date and time attributes of ITS_LIVE granules stored
         in the bucket.
@@ -143,7 +142,7 @@ class FixGranulesAttributes:
         logging.info(f"{len(self.all_granules)} granules to fix...")
         start = 0
 
-        for each in tqdm(self.all_granules[:1], ascii=True, desc="Fixing granules attributes..."):
+        for each in tqdm(self.all_granules, ascii=True, desc="Fixing granules attributes..."):
             FixGranulesAttributes.acquisition_datetime_with_logging(self.bucket, each, local_dir, self.s3)
 
     @staticmethod
@@ -214,7 +213,7 @@ class FixGranulesAttributes:
                 # Upload corrected granule to the bucket
                 s3_client = boto3.client('s3')
                 try:
-                    bucket_granule = granule_basename.replace(bucket_name+'/', '')
+                    bucket_granule = granule_url.replace(bucket_name+'/', '')
                     msgs.append(f"Uploading {bucket_granule} to {bucket_name}")
 
                     s3_client.upload_file(fixed_file, bucket_name, bucket_granule)
