@@ -15,7 +15,7 @@ import os
 from osgeo import gdal
 from pyproj import Transformer
 from shapely import affinity
-from shapely.geometry import Polygon, LineString, GeometryCollection, mapping, MultiPolygon
+from shapely.geometry import Polygon, LineString, GeometryCollection, mapping, MultiPolygon, box
 from shapely.ops import split
 from tqdm import tqdm
 
@@ -30,6 +30,14 @@ gdal.SetConfigOption('VSI_CACHE', 'TRUE')
 gdal.SetConfigOption('GDAL_DISABLE_READDIR_ON_OPEN', 'TRUE')
 
 LON_LAT_PROJECTION = 'EPSG:4326'
+
+POLAR_EPGS = ['EPSG:3413', 'EPSG:3031']
+
+EPSG3031_GRID_ADJUSTMENT = 0.1
+
+GRID_ADJUSTMENT_EPSG3031 = {
+    100000: 0.1
+}
 
 # Set up logging
 logging.basicConfig(
@@ -57,7 +65,7 @@ def translate_polygons(geometry_collection: GeometryCollection) -> list:
 
     return polygons
 
-def define_cubes(shape_filename: str, cube_filename: str, target_epsg_codes: list = None, grid_size: int = 100000):
+def define_cubes(shape_filename: str, cube_filename: str, target_epsg_codes: list, grid_size: int):
     """
     Function to define ITS_LIVE data cubes based on provided shape file and grid
     size in meters.
@@ -121,6 +129,20 @@ def define_cubes(shape_filename: str, cube_filename: str, target_epsg_codes: lis
 
         envelope = shapefile.geometry[index]
 
+        min_lon, min_lat, max_lon, max_lat = envelope.bounds
+        logging.info(f"Using bounds: {[min_lon, min_lat, max_lon, max_lat]}")
+
+        # Construct the most right longitude cutoff line
+        line = [[max_lon, min_lat], [max_lon, max_lat]]
+        most_right_filter = LineString(line)
+        logging.info(f"Using most_right: {most_right_filter}")
+
+        # Construct the most bottom latitude cutoff line
+        line = [[min_lon, min_lat], [max_lon, min_lat]]
+        most_bottom_filter = LineString(line)
+        logging.info(f"Using most_bottom: {most_bottom_filter}")
+        logging.info(f"Num of polygon exterior points: {len(envelope.exterior.coords)}")
+
         # For the polar polygons, where opposite edge vertices
         # (for example,
         #   (-179.999; 55) re-projected to (-2764198.4528116877, 2764198.35632296)
@@ -131,12 +153,12 @@ def define_cubes(shape_filename: str, cube_filename: str, target_epsg_codes: lis
         # full area coverage. Otherwise, we are getting reduced coverage in
         # UTM projection.
         split_polygons = [Polygon(envelope)]
-        if epsg_code in ['3413', '3031']:
-            split_meridian = 0
-            meridian = [[split_meridian, -90.0], [split_meridian, 90.0]]
-            splitter = LineString(meridian)
-            split_polygons = split(Polygon(envelope), splitter)
-            logging.info(f"Number of split polygons: {len(split_polygons)}")
+        # if epsg_code in POLAR_EPGS:
+        #     split_meridian = 0
+        #     meridian = [[split_meridian, -90.0], [split_meridian, 90.0]]
+        #     splitter = LineString(meridian)
+        #     split_polygons = split(Polygon(envelope), splitter)
+        #     logging.info(f"Number of split polygons: {len(split_polygons)}")
 
         # Process each polygon (if it was split, otherwise there is only one
         # polygon)
@@ -184,6 +206,16 @@ def define_cubes(shape_filename: str, cube_filename: str, target_epsg_codes: lis
             x_range = list(range(new_x.min,  new_x.max, grid_size))
             y_range = list(range(new_y.min,  new_y.max, grid_size))
 
+            if epsg_code == 'EPSG:3031':
+                # Extend max latitude by EPSG3031_GRID_ADJUSTMENT degrees to include
+                # cubes slightly outside of the region to avoid gaps
+                # min lon, min lat, max lon, max lat
+                bounds = list(each_polygon.bounds)
+                logging.info(f"3031 bounds: {bounds}")
+                bounds[3] += GRID_ADJUSTMENT_EPSG3031[grid_size]
+                each_polygon = box(*bounds)
+                logging.info(f"3031 bounds extended: {each_polygon}")
+
             # Create x/y ranges for each of the datacubes
             for each_x in tqdm(range(new_x.min, new_x.max, grid_size), ascii=True, desc="Processing X axis..."):
                 for each_y in tqdm(range(new_y.min, new_y.max, grid_size), ascii=True, desc="Processing Y axis..."):
@@ -215,6 +247,7 @@ def define_cubes(shape_filename: str, cube_filename: str, target_epsg_codes: lis
                     crosses_antimeridian = False
                     split_meridian = None
 
+                    # Skip first point in "circular" polygon
                     for coord_index, (lon, _) in enumerate(lonlat_coords[1:], start=1):
                         lon_prev, _ = lonlat_coords[coord_index - 1]
 
@@ -269,10 +302,15 @@ def define_cubes(shape_filename: str, cube_filename: str, target_epsg_codes: lis
                         continue
 
                     # Compute overlap area with original polygon: don't accept cubes
-                    # that overlap for less than 10%
-                    if 100*geometry_obj.intersection(each_polygon).area/geometry_obj.area < 10:
-                        # logging.info(f"Skipping less than 10% coverage datacube: {geometry_obj}")
-                        continue
+                    # that overlap on the most right longitude and the most bottom latitude
+                    intersection = geometry_obj.intersection(each_polygon)
+
+                    # Cube centroid is outside of right and bottom boundaries
+                    if epsg_code not in POLAR_EPGS:
+                        if (intersection.area/geometry_obj.area < 0.50 and \
+                            most_right_filter.intersects(geometry_obj)) or \
+                            most_bottom_filter.intersects(geometry_obj):
+                            continue
 
                     # Region Of Interest coverage within the cube
                     roi_coverage = roi_data[min_y_ind:max_y_ind, min_x_ind:max_x_ind].sum()/cube_num_cells
@@ -330,11 +368,31 @@ if __name__ == '__main__':
                         help='Geojson file to store cube polygon definitions.')
     parser.add_argument('-c', '--epsgCode', type=str, default=None,
                         help='EPGS code(s) as json list to create datacube grid for. Default is None meaning to generate complete datacube grid.')
+    parser.add_argument('-g', '--gridSize', type=int, default=100000,
+                        help='Grid size in meters [%(default)d].')
+    parser.add_argument('-a', '--gridSizeAdjustment', type=float, default=0.0,
+                        help='Grid size adjustment in degrees [%(default)d]. ' \
+                        'The default value is based on default 100km grid size. ' \
+                        'This value should be hand-picked to bring cells into South Pole region to avoid gaps in the cube grid.')
 
     args = parser.parse_args()
 
     # Map provided EPSG codes to the list of int codes
     epsg_codes = list(map(int, json.loads(args.epsgCode))) if args.epsgCode is not None else None
-    logging.info(f"Got EPGS codes: {epsg_codes}")
+    if epsg_codes and len(epsg_codes):
+        logging.info(f"Got EPSG codes: {epsg_codes}")
 
-    define_cubes(args.shapeFile, args.outputFile, epsg_codes)
+    if args.gridSize not in GRID_ADJUSTMENT_EPSG3031:
+        if args.gridSizeAdjustment != 0:
+            logging.info(f"New EPSG3031 grid adjustment value {args.gridSizeAdjustment} is provided for {grid_size} grid size")
+            GRID_ADJUSTMENT_EPSG3031[args.gridSize] = args.gridSizeAdjustment
+
+        else:
+            raise RuntimeError(f"EPSG3031 grid adjustment value must be provided for not registered {grid_size} grid size")
+
+    # This won't allow to replace adjustment value with zero
+    elif args.gridSizeAdjustment != 0 and GRID_ADJUSTMENT_EPSG3031[args.gridSize] != args.gridSizeAdjustment:
+        logging.info(f"Replacing EPSG3031 grid adjustment value {GRID_ADJUSTMENT_EPSG3031[args.gridSize]} with {args.gridSizeAdjustment} for {grid_size} grid size")
+        GRID_ADJUSTMENT_EPSG3031[args.gridSize] = args.gridSizeAdjustment
+
+    define_cubes(args.shapeFile, args.outputFile, epsg_codes, args.gridSize)
