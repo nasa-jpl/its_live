@@ -138,20 +138,6 @@ class FixGranulesAttributes:
             num_to_fix -= num_tasks
             start += num_tasks
 
-    def dont__call__(self, local_dir: str, chunk_size: int):
-        """
-        Fix acquisition date and time attributes of ITS_LIVE granules stored
-        in the bucket.
-        """
-        if not os.path.exists(local_dir):
-            os.mkdir(local_dir)
-
-        logging.info(f"{len(self.all_granules)} granules to fix...")
-        start = 0
-
-        for each in tqdm(self.all_granules, ascii=True, desc="Fixing granules attributes..."):
-            FixGranulesAttributes.acquisition_datetime_with_logging(self.bucket, each, local_dir, self.s3)
-
     @staticmethod
     def acquisition_datetime(bucket_name: str, granule_url: str, local_dir: str, s3):
         """
@@ -233,84 +219,6 @@ class FixGranulesAttributes:
 
                 return msgs
 
-    @staticmethod
-    def acquisition_datetime_with_logging(bucket_name: str, granule_url: str, local_dir: str, s3):
-        """
-        Fix acquisition datetime attribute for image1 and image2 of the granule
-        """
-        logging.info(f'Processing {granule_url}')
-
-        # get center lat lon
-        with s3.open(granule_url) as fhandle:
-            with xr.open_dataset(fhandle) as ds:
-                # Original granules specify '|S1' dtype for data-less
-                # variables, so need to convert them to String type to avoid
-                # xarray adding "string1" new dimension to such dataa-less
-                # char-type variables.
-                proj_data = None
-                if FixGranulesAttributes.POLAR_STEREOGRAPHIC in ds:
-                    proj_data = FixGranulesAttributes.POLAR_STEREOGRAPHIC
-
-                elif FixGranulesAttributes.UTM_PROJECTION in ds:
-                    proj_data = FixGranulesAttributes.UTM_PROJECTION
-
-                # Just copy all attributes for the scalar type of the xr.DataArray.
-                ds[proj_data] = xr.DataArray(
-                    data='',
-                    attrs=ds[proj_data].attrs,
-                    coords={},
-                    dims=[]
-                )
-
-                # Just copy all attributes for the scalar type of the xr.DataArray.
-                ds['img_pair_info'] = xr.DataArray(
-                    data='',
-                    attrs=ds.img_pair_info.attrs,
-                    coords={},
-                    dims=[]
-                )
-
-                img1_datetime = ds['img_pair_info'].attrs['acquisition_date_img1']
-                img2_datetime = ds['img_pair_info'].attrs['acquisition_date_img2']
-
-                granule_basename = os.path.basename(granule_url)
-                time1, time2 = get_granule_acquisition_times(granule_basename)
-
-                if datetime.strptime(img1_datetime, FixGranulesAttributes.DATETIME_FORMAT).date() != \
-                   datetime.strptime(time1, '%Y-%m-%dT%H:%M:%S.%fZ').date():
-                    logging.error(f"Inconsistent img1 date: {img1_datetime} vs. {time1}")
-
-                if datetime.strptime(img2_datetime, FixGranulesAttributes.DATETIME_FORMAT).date() != \
-                   datetime.strptime(time2, '%Y-%m-%dT%H:%M:%S.%fZ').date():
-                    logging.error(f"Inconsistent img2 date: {img2_datetime} vs. {time2}")
-
-                # msgs.append(f'Replace time: {img1_datetime} vs. {time1}; {img2_datetime} vs. {time2}' )
-                logging.info(f'Replace img1 time: {img1_datetime} vs. {time1}')
-                logging.info(f'Replace img2 time: {img2_datetime} vs. {time2}' )
-
-                time1 = datetime.strptime(time1, '%Y-%m-%dT%H:%M:%S.%fZ')
-                time2 = datetime.strptime(time2, '%Y-%m-%dT%H:%M:%S.%fZ')
-
-                ds['img_pair_info'].attrs['acquisition_date_img1'] = time1.strftime(FixGranulesAttributes.DATETIME_FORMAT)
-                ds['img_pair_info'].attrs['acquisition_date_img2'] = time2.strftime(FixGranulesAttributes.DATETIME_FORMAT)
-
-                # Write the granule locally, upload it to the bucket, remove file
-                fixed_file = os.path.join(local_dir, granule_basename)
-                ds.to_netcdf(fixed_file, engine='h5netcdf', encoding = Encoding.LANDSAT)
-
-                # Upload corrected granule to the bucket
-                s3_client = boto3.client('s3')
-                try:
-                    bucket_granule = granule_url.replace(bucket_name+'/', '')
-                    logging.info(f"Uploading {bucket_granule} to {bucket_name}")
-
-                    s3_client.upload_file(fixed_file, bucket_name, bucket_granule)
-
-                    logging.info(f"Removing local {fixed_file}")
-                    os.unlink(fixed_file)
-
-                except ClientError as exc:
-                    logging.error(f"{exc}")
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
