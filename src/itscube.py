@@ -77,6 +77,8 @@ class ITSCube:
     # Grid cell size for the datacube.
     CELL_SIZE = 240.0
 
+    CHIP_SIZE_HEIGHT_NO_VALUE = 65535
+
     def __init__(self, polygon: tuple, projection: str):
         """
         Initialize object.
@@ -1029,6 +1031,21 @@ class ITSCube:
         del v_layers
         gc.collect()
 
+        # Process 'v_error'
+        self.layers[DataVars.V_ERROR] = xr.concat([self.get_data_var(ds, DataVars.V_ERROR) for ds in self.ds] , mid_date_coord)
+        self.layers[DataVars.V_ERROR].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.V_ERROR]
+        self.layers[DataVars.V_ERROR].attrs[DataVars.STD_NAME] = DataVars.NAME[DataVars.V_ERROR]
+        self.layers[DataVars.V_ERROR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
+
+        new_v_vars.append(DataVars.V_ERROR)
+
+        self.set_grid_mapping_attr(DataVars.V_ERROR, ds_grid_mapping_value)
+
+        # Drop data variable as we don't need it anymore - free up memory
+        # Drop only from datasets that have it
+        self.ds = [ds.drop_vars(DataVars.V_ERROR) if DataVars.V_ERROR in ds else ds for ds in self.ds]
+        gc.collect()
+
         # Process 'vx'
         self.layers[DataVars.VX] = xr.concat([ds.vx for ds in self.ds], mid_date_coord)
         self.layers[DataVars.VX].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.VX]
@@ -1118,11 +1135,23 @@ class ITSCube:
         gc.collect()
 
         # Process chip_size_height: dtype=ushort
-        self.layers[DataVars.CHIP_SIZE_HEIGHT] = xr.concat([ds.chip_size_height for ds in self.ds], mid_date_coord)
+        # Optical legacy granules might not have chip_size_height set, use
+        # chip_size_width instead
+        self.layers[DataVars.CHIP_SIZE_HEIGHT] = xr.concat([
+            ds.chip_size_height if
+            np.ma.masked_equal(ds.chip_size_height.values, ITSCube.CHIP_SIZE_HEIGHT_NO_VALUE).count() != 0 else
+            ds.chip_size_width for ds in self.ds ],
+            mid_date_coord)
         self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.CHIP_SIZE_COORDS] = DataVars.DESCRIPTION[DataVars.CHIP_SIZE_COORDS]
         self.layers[DataVars.CHIP_SIZE_HEIGHT].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.CHIP_SIZE_HEIGHT]
 
         self.set_grid_mapping_attr(DataVars.CHIP_SIZE_HEIGHT, ds_grid_mapping_value)
+
+        # Report if using chip_size_width in place of chip_size_height
+        concat_ind = [ind for ind, ds in enumerate(self.ds) if np.ma.masked_equal(ds.chip_size_height.values, ITSCube.CHIP_SIZE_HEIGHT_NO_VALUE).count() == 0]
+        for each in concat_ind:
+            self.logger.warning(f'Using chip_size_width in place of chip_size_height for {self.urls[each]}')
+
 
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.CHIP_SIZE_HEIGHT) for ds in self.ds]
@@ -1149,20 +1178,6 @@ class ITSCube:
 
         # Drop data variable as we don't need it anymore - free up memory
         self.ds = [ds.drop_vars(DataVars.INTERP_MASK) for ds in self.ds]
-        gc.collect()
-
-        # Process 'v_error'
-        self.layers[DataVars.V_ERROR] = xr.concat([self.get_data_var(ds, DataVars.V_ERROR) for ds in self.ds] , mid_date_coord)
-        self.layers[DataVars.V_ERROR].attrs[DataVars.DESCRIPTION_ATTR] = DataVars.DESCRIPTION[DataVars.V_ERROR]
-        self.layers[DataVars.V_ERROR].attrs[DataVars.STD_NAME] = DataVars.NAME[DataVars.V_ERROR]
-        self.layers[DataVars.V_ERROR].attrs[DataVars.UNITS] = DataVars.M_Y_UNITS
-        new_v_vars.append(DataVars.V_ERROR)
-
-        self.set_grid_mapping_attr(DataVars.V_ERROR, ds_grid_mapping_value)
-
-        # Drop data variable as we don't need it anymore - free up memory
-        # Drop only from datasets that have it
-        self.ds = [ds.drop_vars(DataVars.V_ERROR) if DataVars.V_ERROR in ds else ds for ds in self.ds]
         gc.collect()
 
         # Process 'vp'
@@ -1429,9 +1444,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=ITSCube.__doc__.split('\n')[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('-t', '--threads', type=int, default=4,
-                        help='number of threads to use for parallel processing.')
+                        help='number of threads to use for parallel processing [%(default)d].')
     parser.add_argument('-s', '--scheduler', type=str, default="processes",
-                        help="Dask scheduler to use. One of ['threads', 'processes'] (effective only when -p option is specified).")
+                        help="Dask scheduler to use. One of ['threads', 'processes'] (effective only when -p option is specified) [%(default)s].")
     parser.add_argument('-p', '--parallel', action='store_true',
                         help='enable parallel processing')
     parser.add_argument('-n', '--numberGranules', type=int, required=False, default=None,
@@ -1439,23 +1454,28 @@ if __name__ == '__main__':
                              " If none is provided, process all found granules.")
     parser.add_argument('-l', '--localPath', type=str, default=None,
                         help='Local path that stores ITS_LIVE granules.')
-    parser.add_argument('-o', '--outputDir', type=str, default="cubedata.zarr",
-                        help="Zarr output directory to write cube data to. Default is 'cubedata.zarr'.")
+    parser.add_argument('-o', '--outputStore', type=str, default="cubedata.zarr",
+                        help="Zarr output directory to write cube data to [%(default)s].")
+    parser.add_argument('-b', '--outputBucket', type=str, default="s3://its-live-data.jpl.nasa.gov/test_datacube/production",
+                        help="S3 bucket to copy datacube to at the end of the run [%(default)s].")
     parser.add_argument('-c', '--chunks', type=int, default=1000,
-                        help="Number of granules to write at a time. Default is 1000.")
+                        help="Number of granules to write at a time [%(default)d].")
     parser.add_argument('--targetProjection', type=str, required=True,
                         help="UTM target projection.")
     parser.add_argument('--dimSize', type=float, default=100000,
-                        help="Cube dimension in meters.")
+                        help="Cube dimension in meters [%(default)d].")
     parser.add_argument('--centroid', nargs=2, metavar=('x', 'y'), type=float,
                         action='store',
-                        help="Centroid point for the datacube in UTM projection.")
+                        help="Centroid point for the datacube in target EPSG code projection.")
+    parser.add_argument('-r', '--reportDir', type=str, default='logs',
+                        help="Directory to store skipped granules information (no data, wrong projection, double middle date) [%(default)s].")
 
 
     args = parser.parse_args()
     ITSCube.NUM_THREADS = args.threads
     ITSCube.DASK_SCHEDULER = args.scheduler
     ITSCube.NUM_GRANULES_TO_WRITE = args.chunks
+    ITSCube.GRANULE_REPORT_DIR = args.reportDir
 
     # Test Case from itscube.ipynb:
     # =============================
@@ -1486,31 +1506,35 @@ if __name__ == '__main__':
     # Parameters for the search granule API
     API_params = {
         'start'               : '1984-01-01',
-        'end'                 : '2021-01-01',
+        'end'                 : '2021-06-01',
         'percent_valid_pixels': 1
     }
     cube.logger.info("ITS_LIVE API parameters: %s" %API_params)
 
-    skipped_projs = {}
     if not args.parallel:
         # Process ITS_LIVE granules sequentially, look at provided number of granules only
         cube.logger.info("Processing granules sequentially...")
         if args.localPath:
             # Granules are downloaded locally
-            cube.create_from_local_no_api(args.outputDir, args.localPath, args.numberGranules)
+            cube.create_from_local_no_api(args.outputStore, args.localPath, args.numberGranules)
 
         else:
-            cube.create(API_params, args.outputDir, args.numberGranules)
+            cube.create(API_params, args.outputStore, args.numberGranules)
 
     else:
         # Process ITS_LIVE granules in parallel, look at 100 first granules only
         cube.logger.info("Processing granules in parallel...")
         if args.localPath:
             # Granules are downloaded locally
-            cube.create_from_local_parallel_no_api(args.outputDir, args.localPath, args.numberGranules)
+            cube.create_from_local_parallel_no_api(args.outputStore, args.localPath, args.numberGranules)
 
         else:
-            cube.create_parallel(API_params, args.outputDir, args.numberGranules)
+            cube.create_parallel(API_params, args.outputStore, args.numberGranules)
+
+    if os.path.exists(args.outputStore) and len(args.outputBucket):
+        # Copy datacube to the target S3 bucket
+        s3 = s3fs.S3FileSystem()
+        s3.put(args.outputStore, os.path.join(args.outputBucket, args.outputStore), recursive=True)
 
     # Write cube data to the NetCDF file
     # cube.to_netcdf('test_v_cube.nc')
