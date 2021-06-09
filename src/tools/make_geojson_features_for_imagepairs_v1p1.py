@@ -1,9 +1,9 @@
-import numpy as np
 import argparse
 from datetime import datetime
 import geojson
 import h5py
 import json
+import numpy as np
 import os
 import psutil
 import pyproj
@@ -44,7 +44,6 @@ class memtracker:
                     flush=True)
 
 mt = memtracker()
-
 s3 = s3fs.S3FileSystem(anon=True)
 s3_out = s3fs.S3FileSystem()
 
@@ -91,7 +90,15 @@ def image_pair_feature_from_path(infilewithpath, five_points_per_side = False):
         yvals = np.array(inh5.get('y'))
 
         # Extract projection variable
-        projection_cf = inh5['UTM_Projection'] if 'UTM_Projection' in inh5 else inh5['Polar_Stereographic']
+        projection_cf = None
+        if 'mapping' in inh5:
+            projection_cf = inh5['mapping']
+
+        elif 'UTM_Projection' in inh5:
+            projection_cf = inh5['UTM_Projection']
+
+        elif 'Polar_Stereographic' in inh5:
+            projection_cf = inh5['Polar_Stereographic']
 
         imginfo_attrs = inh5['img_pair_info'].attrs
         # turn hdf5 img_pair_info attrs into a python dict to save below
