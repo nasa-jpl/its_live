@@ -91,9 +91,6 @@ class FixGranulesAttributes:
     Class to fix some attributes of ITS_LIVE granules (that were transferred
     from ASF to ITS_LIVE bucket).
     """
-    POLAR_STEREOGRAPHIC = 'Polar_Stereographic'
-    UTM_PROJECTION = 'UTM_Projection'
-
     # Date and time format used by ITS_LIVE granules
     DATETIME_FORMAT = '%Y%m%dT%H:%M:%S'
 
@@ -148,33 +145,6 @@ class FixGranulesAttributes:
         # get center lat lon
         with s3.open(granule_url) as fhandle:
             with xr.open_dataset(fhandle) as ds:
-                # Original granules specify '|S1' dtype for data-less
-                # variables, so need to convert them to String type to avoid
-                # xarray adding "string1" new dimension to such dataa-less
-                # char-type variables.
-                proj_data = None
-                if FixGranulesAttributes.POLAR_STEREOGRAPHIC in ds:
-                    proj_data = FixGranulesAttributes.POLAR_STEREOGRAPHIC
-
-                elif FixGranulesAttributes.UTM_PROJECTION in ds:
-                    proj_data = FixGranulesAttributes.UTM_PROJECTION
-
-                # Just copy all attributes for the scalar type of the xr.DataArray.
-                ds[proj_data] = xr.DataArray(
-                    data='',
-                    attrs=ds[proj_data].attrs,
-                    coords={},
-                    dims=[]
-                )
-
-                # Just copy all attributes for the scalar type of the xr.DataArray.
-                ds['img_pair_info'] = xr.DataArray(
-                    data='',
-                    attrs=ds.img_pair_info.attrs,
-                    coords={},
-                    dims=[]
-                )
-
                 img1_datetime = ds['img_pair_info'].attrs['acquisition_date_img1']
                 img2_datetime = ds['img_pair_info'].attrs['acquisition_date_img2']
 
