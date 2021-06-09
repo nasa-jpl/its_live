@@ -104,8 +104,12 @@ def image_pair_feature_from_path(infilewithpath, five_points_per_side = False):
         # turn hdf5 img_pair_info attrs into a python dict to save below
         img_pair_info_dict = {}
         for k in imginfo_attrs.keys():
-            if imginfo_attrs[k].shape == ():
+            if isinstance(imginfo_attrs[k], str):
+                img_pair_info_dict[k] = imginfo_attrs[k]
+
+            elif imginfo_attrs[k].shape == ():
                 img_pair_info_dict[k] = imginfo_attrs[k].decode('utf-8')  # h5py returns byte values, turn into byte characters
+
             else:
                 img_pair_info_dict[k] = imginfo_attrs[k][0]    # h5py returns lists of numbers - all 1 element lists here, so dereference to number
 
