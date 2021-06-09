@@ -72,7 +72,7 @@ class ASFTransfer:
         while num_to_copy > 0:
             num_tasks = chunks_to_copy if num_to_copy > chunks_to_copy else num_to_copy
 
-            logging.info(f"Starting tasks {start}:{start+num_tasks}")
+            logging.info(f"Starting tasks {start}:{start+num_tasks} out of {num_to_copy} total")
             tasks = [dask.delayed(self.copy_granule)(id) for id in job_ids[start:start+num_tasks]]
             assert len(tasks) == num_tasks
             results = None
@@ -154,7 +154,7 @@ class ASFTransfer:
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('-j', '--job-ids', type=Path, help='JSON list of HyP3 Job IDs')
-    parser.add_argument('-n', '--chunks-to-copy', type=int, default=10, help='Number of granules to copy in parallel [%(default)d]')
+    parser.add_argument('-n', '--number-to-copy', type=int, default=100, help='Number of granules to copy in parallel [%(default)d]')
     parser.add_argument('-t', '--target-bucket', help='Upload the autoRIFT products to this AWS bucket')
     parser.add_argument('-d', '--dir', help='Upload the autoRIFT products to this sub-directory of AWS bucket')
     parser.add_argument('-u', '--user', help='Username for https://urs.earthdata.nasa.gov login')
@@ -165,7 +165,7 @@ def main():
                         datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 
     transfer = ASFTransfer(args.user, args.password, args.target_bucket, args.dir)
-    transfer.run(args.job_ids, args.chunks_to_copy)
+    transfer.run(args.job_ids, args.number_to_copy)
 
 if __name__ == '__main__':
     main()
