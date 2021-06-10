@@ -18,7 +18,7 @@ logging.basicConfig(
 
 class DataCubeBatch:
     """
-    Class to manage one Batch job submition at AWS.
+    Class to manage one Batch job submission at AWS.
     """
     CLIENT = boto3.client('batch')
 
