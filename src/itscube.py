@@ -6,6 +6,7 @@ import copy
 from datetime import datetime, timedelta
 import gc
 import glob
+import json
 import logging
 import os
 import shutil
@@ -1464,9 +1465,9 @@ if __name__ == '__main__':
                         help="UTM target projection.")
     parser.add_argument('--dimSize', type=float, default=100000,
                         help="Cube dimension in meters [%(default)d].")
-    parser.add_argument('--centroid', nargs=2, metavar=('x', 'y'), type=float,
+    parser.add_argument('--centroid', type=str,
                         action='store',
-                        help="Centroid point for the datacube in target EPSG code projection.")
+                        help="Centroid point (x, y) for the datacube in target EPSG code projection.")
     parser.add_argument('-r', '--reportDir', type=str, default='logs',
                         help="Directory to store skipped granules information (no data, wrong projection, double middle date) [%(default)s].")
 
@@ -1486,7 +1487,7 @@ if __name__ == '__main__':
 
     # Centroid for the tile in target projection
     # c_x, c_y = (487462, 9016243)
-    c_x, c_y = args.centroid
+    c_x, c_y = list(map(int, json.loads(args.centroid)))
 
     # Offset in meters (1 pixel=240m): 100 km square (with offset=50km)
     # off = 50000
