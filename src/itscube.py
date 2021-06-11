@@ -1388,8 +1388,6 @@ class ITSCube:
             fh.write(f"# Skipped granules due to wrong projection: {len(all_projs)}\n")
             fh.write('\n'.join(all_projs))
 
-        self.logger.info(f"Done.")
-
     def read_dataset(self, url: str):
         """
         Read Dataset from the file and pre-process for the cube layer.
@@ -1439,6 +1437,8 @@ if __name__ == '__main__':
     import argparse
     import warnings
     import sys
+    import subprocess
+
     warnings.filterwarnings('ignore')
 
     # Command-line arguments parser
@@ -1533,9 +1533,26 @@ if __name__ == '__main__':
             cube.create_parallel(API_params, args.outputStore, args.numberGranules)
 
     if os.path.exists(args.outputStore) and len(args.outputBucket):
-        # Copy datacube to the target S3 bucket
-        s3 = s3fs.S3FileSystem()
-        s3.put(args.outputStore, os.path.join(args.outputBucket, args.outputStore), recursive=True)
+        # Use "subprocess" as s3fs.S3FileSystem leaves unclosed connections
+        # resulting in as many error messages as there are files in Zarr store
+        # to copy
+
+        env_copy = os.environ.copy()
+        command_line = ["aws", "s3", "cp", "--recursive", args.outputStore, os.path.join(args.outputBucket, os.path.basename(args.outputStore))]
+        cube.logger.info(' '.join(command_line))
+
+        command_return = subprocess.run(
+            command_line,
+            env=env_copy,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT
+        )
+        if command_return.returncode != 0:
+            cube.logger.error(f"Failed to copy {args.outputStore} to {args.outputBucket}: {command_return.stdout}")
+
+        # TODO: Copy granule logs to the bucket
 
     # Write cube data to the NetCDF file
     # cube.to_netcdf('test_v_cube.nc')
+    cube.logger.info(f"Done.")
