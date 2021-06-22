@@ -1,0 +1,15 @@
+name: transfer
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - boto3
+  - botocore
+  - dask
+  - python=3.8
+  - pip
+  - xarray
+  - fsspec
+  - aiohttp
+  - h5netcdf
+  - hyp3_sdk>=1.1
