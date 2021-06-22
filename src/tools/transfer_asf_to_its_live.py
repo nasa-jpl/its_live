@@ -66,9 +66,9 @@ class ASFTransfer:
         job_ids = json.loads(job_ids_file.read_text())
 
         total_num_to_copy = len(job_ids)
-        num_to_copy = total_num_to_copy
+        num_to_copy = total_num_to_copy - start_job
         start = start_job
-        logging.info(f"{num_to_copy} granules to copy...")
+        logging.info(f"{num_to_copy} out of {total_num_to_copy} granules to copy...")
 
         while num_to_copy > 0:
             num_tasks = chunks_to_copy if num_to_copy > chunks_to_copy else num_to_copy
