@@ -59,14 +59,14 @@ class ASFTransfer:
         self.target_bucket = target_bucket
         self.target_bucket_dir = target_dir
 
-    def run(self, job_ids_file: str, chunks_to_copy: int):
+    def run(self, job_ids_file: str, chunks_to_copy: int, start_job: int):
         """
         Run the transfer of granules from ASF to ITS_LIVE S3 bucket.
         """
         job_ids = json.loads(job_ids_file.read_text())
 
         num_to_copy = len(job_ids)
-        start = 0
+        start = start_job
         logging.info(f"{num_to_copy} granules to copy...")
 
         while num_to_copy > 0:
@@ -155,6 +155,7 @@ def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('-j', '--job-ids', type=Path, help='JSON list of HyP3 Job IDs')
     parser.add_argument('-n', '--number-to-copy', type=int, default=100, help='Number of granules to copy in parallel [%(default)d]')
+    parser.add_argument('-s', '--start-job', type=int, default=0, help='Job index to start with (to continue from where the previous run stopped) [%(default)d]')
     parser.add_argument('-t', '--target-bucket', help='Upload the autoRIFT products to this AWS bucket')
     parser.add_argument('-d', '--dir', help='Upload the autoRIFT products to this sub-directory of AWS bucket')
     parser.add_argument('-u', '--user', help='Username for https://urs.earthdata.nasa.gov login')
@@ -165,7 +166,7 @@ def main():
                         datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 
     transfer = ASFTransfer(args.user, args.password, args.target_bucket, args.dir)
-    transfer.run(args.job_ids, args.number_to_copy)
+    transfer.run(args.job_ids, args.number_to_copy, args.start_job)
 
 if __name__ == '__main__':
     main()
