@@ -103,7 +103,7 @@ class FixGranulesAttributes:
 
         self.bucket = bucket
 
-    def __call__(self, local_dir: str, chunk_size: int):
+    def __call__(self, local_dir: str, chunk_size: int, num_dask_workers: int):
         """
         Fix acquisition date and time attributes of ITS_LIVE granules stored
         in the bucket.
@@ -127,7 +127,7 @@ class FixGranulesAttributes:
                 # Display progress bar
                 results = dask.compute(tasks,
                                        scheduler="processes",
-                                       num_workers=8)
+                                       num_workers=num_dask_workers)
 
             for each_result in results[0]:
                 logging.info("-->".join(each_result))
@@ -203,7 +203,7 @@ def main():
     )
     parser.add_argument(
         '-d', '--bucket_dir', type=str,
-        default='velocity_image_pair/landsat/v01.0',
+        default='velocity_image_pair/landsat/v02',
         help='AWS S3 bucket and directory that store the granules'
     )
     parser.add_argument(
@@ -215,13 +215,18 @@ def main():
         '-glob', action='store', type=str, default='*/*.nc',
         help='Glob pattern for the granule search under "s3://bucket/dir/" [%(default)s]')
 
+    parser.add_argument('-w', '--dask-workers', type=int,
+        default=8,
+        help='Number of Dask parallel workers [%(default)d]'
+    )
+
     args = parser.parse_args()
 
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s',
                         datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 
     fix_attributes = FixGranulesAttributes(args.bucket, args.bucket_dir, args.glob)
-    fix_attributes(args.local_dir, args.chunk_size)
+    fix_attributes(args.local_dir, args.chunk_size, args.dask_workers)
 
 if __name__ == '__main__':
 
