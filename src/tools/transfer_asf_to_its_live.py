@@ -54,10 +54,13 @@ class ASFTransfer:
     """
     Class to handle ITS_LIVE granule transfer from ASF to ITS_LIVE bucket.
     """
-    def __init__(self, user: str, password: str, target_bucket: str, target_dir: str):
+    PROCESSED_JOB_IDS = []
+
+    def __init__(self, user: str, password: str, target_bucket: str, target_dir: str, processed_jobs_file: str):
         self.hyp3 = sdk.HyP3(HYP3_AUTORIFT_API, user, password)
         self.target_bucket = target_bucket
         self.target_bucket_dir = target_dir
+        self.processed_jobs_file = processed_jobs_file
 
     def run(self, job_ids_file: str, chunks_to_copy: int, start_job: int, num_dask_workers: int):
         """
@@ -85,11 +88,17 @@ class ASFTransfer:
                                        num_workers=num_dask_workers)
 
             # logging.info(f"Results: {results}")
-            for each_result in results[0]:
+            for each_result, id in results[0]:
                 logging.info("-->".join(each_result))
+                ASFTransfer.PROCESSED_JOB_IDS.append(id)
 
             num_to_copy -= num_tasks
             start += num_tasks
+
+        # Store job IDs that were processed
+        with open(self.processed_jobs_file , 'w') as outfile:
+            json.dump(ASFTransfer.PROCESSED_JOB_IDS, outfile)
+
 
     @staticmethod
     def object_exists(bucket, key: str) -> bool:
@@ -146,6 +155,8 @@ class ASFTransfer:
                     bucket.copy(source_dict, target_key)
                     msgs.append(f'Copying {source_dict["Bucket"]}/{source_dict["Key"]} to {bucket.name}/{target_key}')
 
+
+
         else:
             msgs.append(f'WARNING: {job} failed!')
             # TODO: handle failures
@@ -162,12 +173,14 @@ def main():
     parser.add_argument('-d', '--dir', help='Upload the autoRIFT products to this sub-directory of AWS bucket')
     parser.add_argument('-u', '--user', help='Username for https://urs.earthdata.nasa.gov login')
     parser.add_argument('-p', '--password', help='Password for https://urs.earthdata.nasa.gov login')
+    parser.add_argument('-o', '--output-job-file', type=str, default='processed_jobs.json', help='File of processed job IDs [%(default)s]')
+
     args = parser.parse_args()
 
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s',
                         datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 
-    transfer = ASFTransfer(args.user, args.password, args.target_bucket, args.dir)
+    transfer = ASFTransfer(args.user, args.password, args.target_bucket, args.dir, args.output_job_file)
     transfer.run(args.job_ids, args.number_to_copy, args.start_job, args.dask_workers)
 
 if __name__ == '__main__':
