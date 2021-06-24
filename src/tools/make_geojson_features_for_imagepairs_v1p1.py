@@ -76,10 +76,9 @@ def image_pair_feature_from_path(infilewithpath, five_points_per_side = False):
     #  so that is hard coded here. (or not used - don't need it in every feature)
     # base_URL = 'http://its-live-data.jpl.nasa.gov.s3.amazonaws.com/velocity_image_pair/landsat/v00.0'
 
-    directory,filename = infilewithpath.split('/')[-2:]
-
-    # infilewithpath = 'LC08_L1TP_050024_20180814_20180828_01_T1_X_LC08_L1TP_050024_20170928_20171013_01_T1_G0240V01_P091.nc'
-    #     inh5 = h5py.File(infilewithpath, mode = 'r')
+    filename_tokens = infilewithpath.split('/')
+    directory = '/'.join(filename_tokens[1:-1])
+    filename = filename_tokens[-1]
 
     with s3.open(f"s3://{infilewithpath}", "rb") as ins3:
         inh5 = h5py.File(ins3, mode = 'r')
@@ -390,13 +389,13 @@ There are two steps to create geojson catalogs:
 parser.add_argument('-base_dir_s3fs',
                     action='store',
                     type=str,
-                    default='its-live-data.jpl.nasa.gov/velocity_image_pair/landsat/v01.0',
-                    help='S3 path to tile catalog directories (not including the EPSG code for zone of tile) [%(default)s]')
+                    default='its-live-data.jpl.nasa.gov/velocity_image_pair/landsat/v02',
+                    help='S3 path to tile catalog directories (not including the grid code for zone of tile) [%(default)s]')
 
 parser.add_argument('-S3_output_directory',
                     action='store',
                     type=str,
-                    default='its-live-data.jpl.nasa.gov/test_catalog_geojson',
+                    default='its-live-data.jpl.nasa.gov/catalog_geojson/landsat/v02',
                     help='output path for featurecollections [%(default)s]')
 
 parser.add_argument('-chunk_by',
@@ -415,23 +414,23 @@ parser.add_argument('-stop_chunks_at_file',
                     action='store',
                     type=int,
                     default=0,
-                    help='stop run just befor chunk that begins at file n [%(default)d]')
+                    help='stop run just before chunk that begins at file n [%(default)d]')
 
 parser.add_argument('-skipped_granules_file',
                     action='store',
                     type=str,
-                    default='its-live-data.jpl.nasa.gov/test_catalog_geojson/skipped_granules.json',
+                    default='its-live-data.jpl.nasa.gov/catalog_geojson/landsat/v02/skipped_granules_landsat.json',
                     help='S3 filename to keep track of skipped duplicate granules [%(default)s]')
 
 parser.add_argument('-catalog_granules_file',
                     action='store',
                     type=str,
-                    default='its-live-data.jpl.nasa.gov/test_catalog_geojson/used_granules.json',
+                    default='its-live-data.jpl.nasa.gov/catalog_geojson/landsat/v02/used_granules_landsat.json',
                     help='S3 filename to keep track of granules used for the geojson catalog [%(default)s]')
 
 parser.add_argument('-c', '--create_catalog_list',
                     action='store_true',
-                    help='build a list of granules for catalog generation [%(default)s], otherwise read the list of granules from catalog_granules_file file')
+                    help='build a list of granules for catalog generation [%(default)s], otherwise read the list of granules from catalog_granules_file')
 
 parser.add_argument('-glob',
                     action='store',
