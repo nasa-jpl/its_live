@@ -82,6 +82,8 @@ def get_granule_acquisition_times(filename):
             LandSat.get_lc2_metadata_acquisition_time(scenes[0]),
             LandSat.get_lc2_metadata_acquisition_time(scenes[1][:-27])
         )
+    return None, None
+
     # TODO: handle other missions granules
     # elif mission_instrument == 'Sxxx'
 
@@ -103,14 +105,14 @@ class FixGranulesAttributes:
 
         self.bucket = bucket
 
-    def __call__(self, local_dir: str, chunk_size: int, num_dask_workers: int):
+    def __call__(self, local_dir: str, chunk_size: int, num_dask_workers: int, start_index: int):
         """
         Fix acquisition date and time attributes of ITS_LIVE granules stored
         in the bucket.
         """
-        num_to_fix = len(self.all_granules)
+        num_to_fix = len(self.all_granules) - start_index
 
-        start = 0
+        start = start_index
         logging.info(f"{num_to_fix} granules to fix...")
 
         if not os.path.exists(local_dir):
@@ -150,6 +152,9 @@ class FixGranulesAttributes:
 
                 granule_basename = os.path.basename(granule_url)
                 time1, time2 = get_granule_acquisition_times(granule_basename)
+
+                if time1 is None or time2 is None:
+                    msgs.append("CRITICAL: unexpected filename format for {granule_basename}")
 
                 if datetime.strptime(img1_datetime, FixGranulesAttributes.DATETIME_FORMAT).date() != \
                    datetime.strptime(time1, '%Y-%m-%dT%H:%M:%S.%fZ').date():
@@ -220,13 +225,18 @@ def main():
         help='Number of Dask parallel workers [%(default)d]'
     )
 
+    parser.add_argument('-s', '--start-granule', type=int,
+        default=0,
+        help='Index for the start granule to process (if previous processing terminated) [%(default)d]'
+    )
+
     args = parser.parse_args()
 
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s',
                         datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 
     fix_attributes = FixGranulesAttributes(args.bucket, args.bucket_dir, args.glob)
-    fix_attributes(args.local_dir, args.chunk_size, args.dask_workers)
+    fix_attributes(args.local_dir, args.chunk_size, args.dask_workers, args.start_granule)
 
 if __name__ == '__main__':
 
