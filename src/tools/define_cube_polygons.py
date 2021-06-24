@@ -33,8 +33,6 @@ LON_LAT_PROJECTION = 'EPSG:4326'
 
 POLAR_EPGS = ['EPSG:3413', 'EPSG:3031']
 
-EPSG3031_GRID_ADJUSTMENT = 0.1
-
 GRID_ADJUSTMENT_EPSG3031 = {
     100000: 0.1
 }
@@ -207,8 +205,8 @@ def define_cubes(shape_filename: str, cube_filename: str, target_epsg_codes: lis
             y_range = list(range(new_y.min,  new_y.max, grid_size))
 
             if epsg_code == 'EPSG:3031':
-                # Extend max latitude by EPSG3031_GRID_ADJUSTMENT degrees to include
-                # cubes slightly outside of the region to avoid gaps
+                # Extend max latitude by GRID_ADJUSTMENT_EPSG3031[grid_size] degrees
+                # to include cubes slightly outside of the region to avoid gaps
                 # min lon, min lat, max lon, max lat
                 bounds = list(each_polygon.bounds)
                 logging.info(f"3031 bounds: {bounds}")
