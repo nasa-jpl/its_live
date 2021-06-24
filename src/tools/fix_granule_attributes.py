@@ -155,6 +155,7 @@ class FixGranulesAttributes:
 
                 if time1 is None or time2 is None:
                     msgs.append("CRITICAL: unexpected filename format for {granule_basename}")
+                    continue
 
                 if datetime.strptime(img1_datetime, FixGranulesAttributes.DATETIME_FORMAT).date() != \
                    datetime.strptime(time1, '%Y-%m-%dT%H:%M:%S.%fZ').date():
