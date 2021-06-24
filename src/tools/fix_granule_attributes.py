@@ -153,9 +153,9 @@ class FixGranulesAttributes:
                 granule_basename = os.path.basename(granule_url)
                 time1, time2 = get_granule_acquisition_times(granule_basename)
 
-                if time1 is None or time2 is None:
-                    msgs.append("CRITICAL: unexpected filename format for {granule_basename}")
-                    continue
+                if (time1 is None) or (time2 is None):
+                    msgs.append(f"CRITICAL: unexpected filename format for {granule_basename}")
+                    return msgs
 
                 if datetime.strptime(img1_datetime, FixGranulesAttributes.DATETIME_FORMAT).date() != \
                    datetime.strptime(time1, '%Y-%m-%dT%H:%M:%S.%fZ').date():
