@@ -62,11 +62,25 @@ class ASFTransfer:
         self.target_bucket_dir = target_dir
         self.processed_jobs_file = processed_jobs_file
 
-    def run(self, job_ids_file: str, chunks_to_copy: int, start_job: int, num_dask_workers: int):
+    def __call__(
+        self,
+        job_ids_file: str,
+        exclude_job_ids_file: str,
+        chunks_to_copy: int,
+        start_job: int,
+        num_dask_workers: int):
         """
         Run the transfer of granules from ASF to ITS_LIVE S3 bucket.
+
+        If provided, don't process job IDs listed in exclude_job_ids_file (
+        as previously processed).
         """
         job_ids = json.loads(job_ids_file.read_text())
+        if exclude_job_ids_file is not None:
+            exclude_ids = json.loads(exclude_job_ids_file.read_text())
+
+            # Remove exclude_ids from the jobs to process
+            job_ids = list(set(job_ids).difference(exclude_ids))
 
         total_num_to_copy = len(job_ids)
         num_to_copy = total_num_to_copy - start_job
@@ -171,6 +185,7 @@ def main():
     parser.add_argument('-u', '--user', help='Username for https://urs.earthdata.nasa.gov login')
     parser.add_argument('-p', '--password', help='Password for https://urs.earthdata.nasa.gov login')
     parser.add_argument('-o', '--output-job-file', type=str, default='processed_jobs.json', help='File of processed job IDs [%(default)s]')
+    parser.add_argument('-e', '--exclude-job-file', type=Path, default=None, help='JSON list of HyP3 Job IDs (previously processed) to exclude from the transfer [%(default)s]')
 
     args = parser.parse_args()
 
@@ -178,7 +193,13 @@ def main():
                         datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 
     transfer = ASFTransfer(args.user, args.password, args.target_bucket, args.dir, args.output_job_file)
-    transfer.run(args.job_ids, args.number_to_copy, args.start_job, args.dask_workers)
+    transfer(
+        args.job_ids,
+        args.exclude_job_file, # Exclude previously processed job IDs if any
+        args.number_to_copy,
+        args.start_job,
+        args.dask_workers
+    )
 
 if __name__ == '__main__':
     main()
