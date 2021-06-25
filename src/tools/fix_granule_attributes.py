@@ -75,17 +75,17 @@ def get_granule_acquisition_times(filename):
     # Get mission + sensor from the first image name
     mission_instrument = scenes[0][0:4]
 
-    if mission_instrument == 'LC08':
+    if mission_instrument in ('LC08', 'LO08'):
         # Landsat8 granule filename. For example:
         # LC08_L1TP_231011_20210319_20210328_02_T2_X_LC08_L1TP_231011_20210404_20210409_02_T1_G0120V02_P039_IL_ASF_OD.nc
         return (
             LandSat.get_lc2_metadata_acquisition_time(scenes[0]),
             LandSat.get_lc2_metadata_acquisition_time(scenes[1][:-27])
         )
-    return None, None
-
     # TODO: handle other missions granules
     # elif mission_instrument == 'Sxxx'
+
+    return None, None
 
 
 class FixGranulesAttributes:
