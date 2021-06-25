@@ -99,7 +99,6 @@ class ASFTransfer:
         with open(self.processed_jobs_file , 'w') as outfile:
             json.dump(ASFTransfer.PROCESSED_JOB_IDS, outfile)
 
-
     @staticmethod
     def object_exists(bucket, key: str) -> bool:
         try:
@@ -120,7 +119,7 @@ class ASFTransfer:
 
         if job.running():
             msgs.append(f'WARNING: Job is still running! Skipping {job}')
-            return msgs
+            return msgs, job_id
 
         if job.succeeded():
             # get center lat lon
@@ -155,13 +154,11 @@ class ASFTransfer:
                     bucket.copy(source_dict, target_key)
                     msgs.append(f'Copying {source_dict["Bucket"]}/{source_dict["Key"]} to {bucket.name}/{target_key}')
 
-
-
         else:
             msgs.append(f'WARNING: {job} failed!')
             # TODO: handle failures
 
-        return msgs
+        return msgs, job_id
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
