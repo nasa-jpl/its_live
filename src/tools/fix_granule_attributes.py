@@ -13,12 +13,13 @@ import argparse
 import boto3
 from botocore.exceptions import ClientError
 import dask
-from datetime import datetime
+import datetime
 from dask.diagnostics import ProgressBar
 import json
 import logging
 import os
 import s3fs
+import time
 from tqdm import tqdm
 import xarray as xr
 
@@ -41,6 +42,9 @@ class Encoding:
 
 class LandSat:
     BUCKET = 'usgs-landsat'
+
+    # Datetime format for the metadata in LandSat data
+    DATETIME_FORMAT = '%Y-%m-%dT%H:%M:%S.%fZ'
 
     @staticmethod
     def get_lc2_stac_json_key(scene_name):
@@ -65,6 +69,7 @@ class LandSat:
         s3_client = boto3.client('s3')
         obj = s3_client.get_object(Bucket=LandSat.BUCKET, Key=key, RequestPayer='requester')
         return json.load(obj['Body'])['properties']['datetime']
+
 
 def get_granule_acquisition_times(filename):
     """
@@ -96,22 +101,26 @@ class FixGranulesAttributes:
     # Date and time format used by ITS_LIVE granules
     DATETIME_FORMAT = '%Y%m%dT%H:%M:%S'
 
-    def __init__(self, bucket: str, bucket_dir: str, glob_pattern: dir):
-        self.s3 = s3fs.S3FileSystem()
+    # Default "zero" (not set) time for the granule acquisition date/time
+    ZERO_TIME = datetime.time(0,0,0)
 
+    def __init__(self, bucket: str, bucket_dir: str, glob_pattern: dir):
+        """
+        Initialize the object.
+        """
         # use a glob to list directory
         logging.info(f"Reading {bucket_dir}")
-        self.all_granules = self.s3.glob(f'{os.path.join(bucket, bucket_dir)}/{glob_pattern}')
+        self.all_granules = s3fs.S3FileSystem(skip_instance_cache=True).glob(f'{os.path.join(bucket, bucket_dir)}/{glob_pattern}')
+        self.all_granules.sort()
 
         self.bucket = bucket
 
-    def __call__(self, local_dir: str, chunk_size: int, num_dask_workers: int, start_index: int):
+    def parallel(self, local_dir: str, chunk_size: int, num_dask_workers: int, start_index: int):
         """
         Fix acquisition date and time attributes of ITS_LIVE granules stored
         in the bucket.
         """
         num_to_fix = len(self.all_granules) - start_index
-
         start = start_index
         logging.info(f"{num_to_fix} granules to fix...")
 
@@ -122,7 +131,7 @@ class FixGranulesAttributes:
             num_tasks = chunk_size if num_to_fix > chunk_size else num_to_fix
 
             logging.info(f"Starting tasks {start}:{start+num_tasks}")
-            tasks = [dask.delayed(FixGranulesAttributes.acquisition_datetime)(self.bucket, each, local_dir, self.s3) for each in self.all_granules[start:start+num_tasks]]
+            tasks = [dask.delayed(FixGranulesAttributes.acquisition_datetime)(self.bucket, each, local_dir) for each in self.all_granules[start:start+num_tasks]]
             results = None
 
             with ProgressBar():
@@ -137,40 +146,89 @@ class FixGranulesAttributes:
             num_to_fix -= num_tasks
             start += num_tasks
 
+    def __call__(self, local_dir: str, chunk_size: int, start_index: int=0, stop_index: int=None):
+        """
+        Fix acquisition date and time attributes of ITS_LIVE granules stored
+        in the bucket.
+        """
+        num_to_fix = len(self.all_granules) - start_index
+        if stop_index is not None:
+            num_to_fix = stop_index - start_index
+
+        start = start_index
+        logging.info(f"{num_to_fix} granules to fix (start={start_index} stop={stop_index})...")
+
+        if not os.path.exists(local_dir):
+            os.mkdir(local_dir)
+
+        while num_to_fix > 0:
+            num_tasks = chunk_size if num_to_fix > chunk_size else num_to_fix
+
+            logging.info(f"Starting tasks {start}:{start+num_tasks}")
+            for each in self.all_granules[start:start+num_tasks]:
+                each_result = FixGranulesAttributes.acquisition_datetime(self.bucket, each, local_dir)
+                logging.info("-->".join(each_result))
+                time.sleep(3)
+
+            num_to_fix -= num_tasks
+            start += num_tasks
+
     @staticmethod
-    def acquisition_datetime(bucket_name: str, granule_url: str, local_dir: str, s3):
+    def acquisition_datetime(bucket_name: str, granule_url: str, local_dir: str):
         """
         Fix acquisition datetime attribute for image1 and image2 of the granule
         """
         msgs = [f'Processing {granule_url}']
 
-        # get center lat lon
-        with s3.open(granule_url) as fhandle:
+        # When there is not much work to be done over the s3fs, some of the reads
+        # seem to be stuck when the same cached s3 instance is reused. Disable
+        # cache of s3fs instances (fixes the problem).
+        s3 = s3fs.S3FileSystem(skip_instance_cache=True)
+
+        with s3.open(granule_url, 'rb') as fhandle:
             with xr.open_dataset(fhandle) as ds:
                 img1_datetime = ds['img_pair_info'].attrs['acquisition_date_img1']
                 img2_datetime = ds['img_pair_info'].attrs['acquisition_date_img2']
 
-                granule_basename = os.path.basename(granule_url)
-                time1, time2 = get_granule_acquisition_times(granule_basename)
+                # Convert to datetime objects
+                img1_obj = datetime.datetime.strptime(img1_datetime, FixGranulesAttributes.DATETIME_FORMAT)
+                img2_obj = datetime.datetime.strptime(img2_datetime, FixGranulesAttributes.DATETIME_FORMAT)
 
-                if (time1 is None) or (time2 is None):
+                # Check if acquisition time is already set (non-zero).
+                # If LandSat acquisition time happens to be zero, then it will get reset
+                # through the time metadata as acquired from the LandSat S3 bucket.
+                # (most likely there won't be many occurences of it)
+                if img1_obj.time() != FixGranulesAttributes.ZERO_TIME and \
+                   img2_obj.time() != FixGranulesAttributes.ZERO_TIME:
+                    msgs.append("Time is already set.")
+                    return msgs
+
+                granule_basename = os.path.basename(granule_url)
+                time1_str, time2_str = get_granule_acquisition_times(granule_basename)
+
+                if (time1_str is None) or (time2_str is None):
                     msgs.append(f"CRITICAL: unexpected filename format for {granule_basename}")
                     return msgs
 
-                if datetime.strptime(img1_datetime, FixGranulesAttributes.DATETIME_FORMAT).date() != \
-                   datetime.strptime(time1, '%Y-%m-%dT%H:%M:%S.%fZ').date():
-                    msgs.append(f"ERROR: Inconsistent img1 date: {img1_datetime} vs. {time1}")
+                time1 = datetime.datetime.strptime(time1_str, LandSat.DATETIME_FORMAT)
+                time2 = datetime.datetime.strptime(time2_str, LandSat.DATETIME_FORMAT)
 
-                if datetime.strptime(img2_datetime, FixGranulesAttributes.DATETIME_FORMAT).date() != \
-                   datetime.strptime(time2, '%Y-%m-%dT%H:%M:%S.%fZ').date():
-                    msgs.append(f"ERROR: Inconsistent img2 date: {img2_datetime} vs. {time2}")
+                if img1_obj.date() != time1.date():
+                    msgs.append(f"ERROR: Inconsistent img1 date: {img1_datetime} vs. {time1_str}")
+                    return msgs
 
-                # msgs.append(f'Replace time: {img1_datetime} vs. {time1}; {img2_datetime} vs. {time2}' )
-                msgs.append(f'Replace img1 time: {img1_datetime} vs. {time1}')
-                msgs.append(f'Replace img2 time: {img2_datetime} vs. {time2}' )
+                if img2_obj.date() != time2.date():
+                    msgs.append(f"ERROR: Inconsistent img2 date: {img2_datetime} vs. {time2_str}")
+                    return msgs
 
-                time1 = datetime.strptime(time1, '%Y-%m-%dT%H:%M:%S.%fZ')
-                time2 = datetime.strptime(time2, '%Y-%m-%dT%H:%M:%S.%fZ')
+                # If time happends to be the same as in the granule, skip
+                # overwriting the file
+                if img1_obj.time() == time1.time() and img2_obj.time() == time2.time():
+                    msgs.append("Time stamps match, skip overwrite.")
+                    return msgs
+
+                msgs.append(f'Replace img1 time: {img1_datetime} vs. {time1_str}')
+                msgs.append(f'Replace img2 time: {img2_datetime} vs. {time2_str}' )
 
                 ds['img_pair_info'].attrs['acquisition_date_img1'] = time1.strftime(FixGranulesAttributes.DATETIME_FORMAT)
                 ds['img_pair_info'].attrs['acquisition_date_img2'] = time2.strftime(FixGranulesAttributes.DATETIME_FORMAT)
@@ -184,7 +242,6 @@ class FixGranulesAttributes:
                 try:
                     bucket_granule = granule_url.replace(bucket_name+'/', '')
                     msgs.append(f"Uploading {bucket_granule} to {bucket_name}")
-
                     s3_client.upload_file(fixed_file, bucket_name, bucket_granule)
 
                     msgs.append(f"Removing local {fixed_file}")
@@ -218,17 +275,25 @@ def main():
         help='Directory to store fixed granules before uploading them to the S3 bucket'
     )
     parser.add_argument(
-        '-glob', action='store', type=str, default='*/*.nc',
+        '-glob', action='store', type=str,
+        default='*/*.nc',
         help='Glob pattern for the granule search under "s3://bucket/dir/" [%(default)s]')
 
-    parser.add_argument('-w', '--dask-workers', type=int,
-        default=8,
+    parser.add_argument(
+        '-w', '--dask-workers', type=int,
+        default=None,
         help='Number of Dask parallel workers [%(default)d]'
     )
 
-    parser.add_argument('-s', '--start-granule', type=int,
+    parser.add_argument(
+        '--start-granule', type=int,
         default=0,
-        help='Index for the start granule to process (if previous processing terminated) [%(default)d]'
+        help='Index for the start granule to process (inclusive)[%(default)d]'
+    )
+    parser.add_argument(
+        '--stop-granule', type=int,
+        default=None,
+        help='Index for the stop granule to process (exclusive) [%(default)d]'
     )
 
     args = parser.parse_args()
@@ -237,12 +302,13 @@ def main():
                         datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 
     fix_attributes = FixGranulesAttributes(args.bucket, args.bucket_dir, args.glob)
-    fix_attributes(args.local_dir, args.chunk_size, args.dask_workers, args.start_granule)
+
+    if args.dask_workers is not None:
+        fix_attributes.parallel(args.local_dir, args.chunk_size, args.dask_workers, args.start_granule)
+
+    else:
+        fix_attributes(args.local_dir, args.chunk_size, args.start_granule, args.stop_granule)
 
 if __name__ == '__main__':
-
-    # scene = 'LC08_L1TP_009011_20200703_20200913_02_T1'
-    # acquisition_time = get_lc2_metadata_acquisition_time(scene)
-    # print(f'{scene} acquisition time: {acquisition_time}')
 
     main()
