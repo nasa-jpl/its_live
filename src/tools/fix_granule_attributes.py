@@ -254,6 +254,9 @@ class FixGranulesAttributes:
 
 
 def main():
+    """
+    Main function.
+    """
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         '-c', '--chunk_size', type=int,
@@ -297,9 +300,7 @@ def main():
     )
 
     args = parser.parse_args()
-
-    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s',
-                        datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
+    logging.info(f"Args: {args}")
 
     fix_attributes = FixGranulesAttributes(args.bucket, args.bucket_dir, args.glob)
 
@@ -309,6 +310,12 @@ def main():
     else:
         fix_attributes(args.local_dir, args.chunk_size, args.start_granule, args.stop_granule)
 
+
 if __name__ == '__main__':
+    import sys
+
+    logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s',
+                        datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
+    logging.info(f"Command: {sys.argv}")
 
     main()
