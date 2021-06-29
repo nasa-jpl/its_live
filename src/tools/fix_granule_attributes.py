@@ -262,7 +262,7 @@ def main():
     logging.info(f"Args: {args}")
 
     fix_attributes = FixGranulesAttributes(args.bucket, args.bucket_dir, args.glob, args.exclude_granule_file, args.granule_prefix)
-    # fix_attributes(args.local_dir, args.chunk_size, args.dask_workers, args.start_granule)
+    fix_attributes(args.local_dir, args.chunk_size, args.dask_workers, args.start_granule)
 
 
 if __name__ == '__main__':
