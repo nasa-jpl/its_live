@@ -319,3 +319,5 @@ if __name__ == '__main__':
     logging.info(f"Command: {sys.argv}")
 
     main()
+
+    logging.info("Done.")
