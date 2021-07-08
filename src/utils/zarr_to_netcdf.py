@@ -56,7 +56,7 @@ if __name__ == '__main__':
     time_delta = timeit.default_timer() - start_time
     print(f"Read Zarr {args.input} (took {time_delta} seconds)")
 
-    compression = {"zlib": True, "complevel": 1}
+    compression = {"zlib": True, "complevel": 2, "shuffle": True}
     encoding = {}
 
     encoding = {
