@@ -2,6 +2,7 @@
 """
 Fix attributes of ITS_LIVE granules with information that was not available
 during granule production.
+
 ATTN: This script should run from AWS EC2 instance to have fast access to the S3
 bucket. It takes 2 seconds to upload the file to the S3 bucket from EC2 instance
 vs. 1.5 minutes to upload the file from laptop to the S3 bucket.
@@ -21,22 +22,8 @@ import s3fs
 from tqdm import tqdm
 import xarray as xr
 
+from mission_info import Encoding
 
-class Encoding:
-    """
-    Encoding settings for writing ITS_LIVE granule to the file
-    """
-    LANDSAT = {
-        'interp_mask':      {'_FillValue': 0.0, 'dtype': 'ubyte'},
-        'chip_size_height': {'_FillValue': 0.0, 'dtype': 'ushort'},
-        'chip_size_width':  {'_FillValue': 0.0, 'dtype': 'ushort'},
-        'v_error':          {'_FillValue': -32767.0, 'dtype': 'short'},
-        'v':                {'_FillValue': -32767.0, 'dtype': 'short'},
-        'vx':               {'_FillValue': -32767.0, 'dtype': 'short'},
-        'vy':               {'_FillValue': -32767.0, 'dtype': 'short'},
-        'x':                {'_FillValue': None},
-        'y':                {'_FillValue': None}
-    }
 
 class LandSat:
     BUCKET = 'usgs-landsat'
@@ -216,7 +203,11 @@ class FixGranulesAttributes:
 
 
 def main():
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__.split('\n')[0],
+        epilog=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     parser.add_argument(
         '-c', '--chunk_size', type=int,
         default=100, help='Number of granules to fix in parallel [%(default)d]'
