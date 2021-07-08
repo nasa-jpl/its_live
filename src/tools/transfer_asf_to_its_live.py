@@ -68,7 +68,8 @@ class ASFTransfer:
         exclude_job_ids_file: str,
         chunks_to_copy: int,
         start_job: int,
-        num_dask_workers: int):
+        num_dask_workers: int
+    ):
         """
         Run the transfer of granules from ASF to ITS_LIVE S3 bucket.
 
