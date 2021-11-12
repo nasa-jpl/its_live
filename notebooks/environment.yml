@@ -1,0 +1,24 @@
+name: itslive-notebooks
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - boto3
+  - fiona
+  - gdal
+  - h5netcdf
+  - h5py
+  - imagemagick
+  - ipyleaflet
+  - ipympl
+  - jupyter
+  - matplotlib
+  - netcdf4
+  - pandas
+  - psutil
+  - pyproj
+  - s3fs
+  - shapely
+  - xarray
+  - zarr
