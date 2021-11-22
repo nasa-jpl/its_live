@@ -18,7 +18,7 @@ dependencies:
   - pandas
   - psutil
   - pyproj
-  - s3fs
+  - s3fs>=2021.11
   - shapely
   - xarray
   - zarr
