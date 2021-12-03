@@ -3,4 +3,4 @@ A NASA MEaSUREs project to provide automated, low latency, global glacier flow a
 
 This repo provides tools for accessing and working with [ITS_LIVE](https://its-live.jpl.nasa.gov/)data.
 
-![ITS_LIVE](itslive_velmap.jpg)
+![ITS_LIVE](its_live_antarctic_vel.jpg)
