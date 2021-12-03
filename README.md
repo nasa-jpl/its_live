@@ -1,4 +1,4 @@
-![ITS_LIVE](https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_logo.png)
+![ITS_LIVE](https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_logo_transparent_wht.png)
 
 A NASA MEaSUREs project to provide automated, low latency, global glacier flow and elevation change datasets
 
