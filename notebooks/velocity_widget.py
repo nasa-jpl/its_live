@@ -26,7 +26,7 @@ class timeseriesException(Exception):
     pass
 
 
-class ITSLIVE_Map:
+class ITSLIVE:
     """
     Class to encapsulate ITS_LIVE plotting from zarr in S3
     """
@@ -43,6 +43,7 @@ class ITSLIVE_Map:
             "l8": "s3://its-live-data.jpl.nasa.gov/datacubes/v01/datacubes_100km_v01.json",
             "all": "s3://its-live-data/test_datacubes/v02/datacubes_catalog.json",
         }
+        self.config = {"plot": "v", "max_separation_days": 90, "color_by": "markers"}
         self._s3fs = s3.S3FileSystem(anon=True)
         self.open_cubes = {}
         self.outwidget = ipywidgets.Output(layout={"border": "1px solid blue"})
@@ -57,8 +58,10 @@ class ITSLIVE_Map:
         with self._s3fs.open(self.catalog["l8"], "r") as incubejson:
             self._json_l8 = json.load(incubejson)
         self.json_catalog = self._json_all
-        self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 6))
         self._initialize_widgets()
+
+    def set_config(self, config):
+        self.config = config
 
     def _initialize_widgets(self):
         self._control_plot_running_mean_checkbox = ipywidgets.Checkbox(
@@ -68,6 +71,9 @@ class ITSLIVE_Map:
             indent=False,
             tooltip="Plot running mean through each time series",
             layout=ipywidgets.Layout(width="150px"),
+        )
+        self._control_plot_running_mean_widgcntrl = ipyleaflet.WidgetControl(
+            widget=self._control_plot_running_mean_checkbox, position="bottomright"
         )
         self._control_clear_points_button = ipywidgets.Button(
             description="Clear Points", tooltip="clear all picked points"
@@ -125,8 +131,24 @@ class ITSLIVE_Map:
             {
                 "url": "https://glacierflow.nyc3.digitaloceanspaces.com/webmaps/vel_map/{z}/{x}/{y}.png",
                 "attribution": self.VELOCITY_ATTRIBUTION,
-                "name": "ESRI basemap",
+                "name": "ITS_LIVE Velocity Mosaic",
             }
+        )
+        self._map_coverage_layer = ipyleaflet.GeoJSON(
+            data=self.json_catalog,
+            name="ITS_LIVE datacube coverage",
+            style={
+                "opacity": 0.8,
+                "fillOpacity": 0.2,
+                "weight": 1,
+                "color": "red",
+                "cursor": "crosshair",
+            },
+            hover_style={
+                "color": "white",
+                "dashArray": "0",
+                "fillOpacity": 0.5,
+            },
         )
         self.map = ipyleaflet.Map(
             basemap=self._map_base_layer,
@@ -147,6 +169,7 @@ class ITSLIVE_Map:
 
         self.map.add_layer(self._map_picked_points_layer_group)
         self.map.add_layer(self._map_velocity_layer)
+        self.map.add_layer(self._map_coverage_layer)
         self.map.add_control(
             ipyleaflet.MeasureControl(
                 position="topleft",
@@ -157,6 +180,7 @@ class ITSLIVE_Map:
         self.map.add_control(ipyleaflet.FullScreenControl())
         self.map.add_control(ipyleaflet.LayersControl())
         self.map.add_control(ipyleaflet.ScaleControl(position="bottomleft"))
+        self.map.add_control(self._control_plot_running_mean_widgcntrl)
         self.map.add_control(self._control_coverage_button_widgcntrl)
         self.map.add_control(self._control_clear_points_button_widgcntrl)
         self.map.add_control(self._control_plot_button_widgcntrl)
@@ -165,8 +189,10 @@ class ITSLIVE_Map:
         self.map.on_interaction(self._handle_map_click)
 
     def display(self, render_sidecar=True):
+
         self.sidecar = Sidecar(title="Map Widget")
         if render_sidecar:
+            self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 6))
             self.sidecar.clear_output()
             with self.sidecar:
                 display(self.outwidget)
@@ -174,13 +200,30 @@ class ITSLIVE_Map:
                 display(self.map)
 
     def reload_catalog(self, coverage) -> None:
+        self.map.remove_layer(self._map_coverage_layer)
         if "Landsat" in coverage["new"]:
             self.json_catalog = self._json_l8
             self._current_catalog = "Landsat 8"
         else:
             self.json_catalog = self._json_all
             self._current_catalog = "All Satellites"
-        print(f"Using: {coverage}")
+        self._map_coverage_layer = ipyleaflet.GeoJSON(
+            data=self.json_catalog,
+            name="ITS_LIVE datacube coverage",
+            style={
+                "opacity": 0.8,
+                "fillOpacity": 0.2,
+                "weight": 1,
+                "color": "red",
+                "cursor": "crosshair",
+            },
+            hover_style={
+                "color": "white",
+                "dashArray": "0",
+                "fillOpacity": 0.5,
+            },
+        )
+        self.map.add_layer(self._map_coverage_layer)
 
     def get_timeseries(self, point_xy, point_epsg_str, variable):
 
@@ -352,6 +395,78 @@ class ITSLIVE_Map:
             else:
                 self._last_click = kwargs
 
+    def _plot_by_satellite(self, ins3xr, point_v, ax, map_epsg):
+        sat = np.array([x[0] for x in ins3xr["satellite_img1"].values])
+
+        sats = np.unique(sat)
+        sat_plotsym_dict = {
+            "1": "r+",
+            "2": "b+",
+            "8": "g+",
+        }
+
+        sat_label_dict = {
+            "1": "Sentinel 1",
+            "2": "Sentinel 2",
+            "8": "Landsat 8",
+        }
+
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Speed (m/yr)")
+        ax.set_title("Ice flow speed pulled directly from S3")
+
+        for satellite in sats[::-1]:
+            if any(sat == satellite):
+                ins3xr.mid_date.values[sat == satellite]
+                ax.plot(
+                    ins3xr.mid_date.values[sat == satellite],
+                    point_v[sat == satellite],
+                    sat_plotsym_dict[satellite],
+                    label=sat_label_dict[satellite],
+                )
+
+    def _plot_by_points(self, ins3xr, point_v, ax, map_epsg):
+
+        dt = ins3xr["date_dt"].values
+        # TODO: document this
+        dt = dt.astype(float) * 1.15741e-14
+        if (
+            self.config["max_separation_days"] < 5
+            or self.config["max_separation_days"] > 180
+        ):
+            max_dt = 90
+        else:
+            max_dt = self.config["max_separation_days"]
+        # set the maximum image-pair time separation (dt) that will be plotted
+        alpha_value = 0.75
+        marker_size = 3
+        if self._control_plot_running_mean_checkbox.value:
+            alpha_value = 0.25
+            marker_size = 2
+            runmean, ts = self.runningMean(
+                ins3xr.mid_date[dt < max_dt].values,
+                point_v[dt < max_dt].values,
+                5,
+                30,
+            )
+            ax.plot(
+                ts,
+                runmean,
+                linestyle="-",
+                color=plt.cm.tab10(self.color_index),
+                linewidth=2,
+            )
+        ax.plot(
+            ins3xr.mid_date[dt < max_dt],
+            point_v[dt < max_dt],
+            linestyle="None",
+            markeredgecolor=plt.cm.tab10(self.color_index),
+            markerfacecolor=plt.cm.tab10(self.color_index),
+            marker="o",
+            alpha=alpha_value,
+            markersize=marker_size,
+        )
+
     def plot_point_on_fig(self, point_xy, ax, map_epsg):
 
         # pointxy is [x,y] coordinate in mapfig projection (map_epsg below), nax is plot axis for time series plot
@@ -360,53 +475,21 @@ class ITSLIVE_Map:
             f"fetching timeseries for point x={point_xy[0]:10.2f} y={point_xy[1]:10.2f}",
             flush=True,
         )
+        if "plot" in self.config:
+            variable = self.config["plot"]
+        else:
+            variable = "v"
 
         ins3xr, point_v, point_tilexy = self.get_timeseries(
-            point_xy, map_epsg, "v"
+            point_xy, map_epsg, variable
         )  # returns xarray dataset object (used for time axis in plot) and already loaded v time series
         if ins3xr is not None:
-
-            dt = ins3xr["date_dt"].values
-            dt = dt.astype(float) * 1.15741e-14
-            max_dt = 90
-            # set the maximum image-pair time separation (dt) that will be plotted
-
-            if self._control_plot_running_mean_checkbox.value:
-                ax.plot(
-                    ins3xr.mid_date[dt < max_dt],
-                    point_v[dt < max_dt],
-                    linestyle="None",
-                    markeredgecolor=plt.cm.tab10(self.color_index),
-                    markerfacecolor=plt.cm.tab10(self.color_index),
-                    marker="o",
-                    alpha=0.25,
-                    markersize=2,
-                )
-                runmean, ts = self.runningMean(
-                    ins3xr.mid_date[dt < max_dt].values,
-                    point_v[dt < max_dt].values,
-                    5,
-                    30,
-                )
-                ax.plot(
-                    ts,
-                    runmean,
-                    linestyle="-",
-                    color=plt.cm.tab10(self.color_index),
-                    linewidth=2,
-                )
-            else:  # no running mean lines
-                ax.plot(
-                    ins3xr.mid_date[dt < max_dt],
-                    point_v[dt < max_dt],
-                    linestyle="None",
-                    markeredgecolor=plt.cm.tab10(self.color_index),
-                    markerfacecolor=plt.cm.tab10(self.color_index),
-                    marker="o",
-                    alpha=0.75,
-                    markersize=3,
-                )
-
+            # print(ins3xr)
+            if self.config["color_by"] == "satellite":
+                self._plot_by_satellite(ins3xr, point_v, ax, map_epsg)
+            else:
+                self._plot_by_points(ins3xr, point_v, ax, map_epsg)
+            self._plot_by_points
             total_time = time.time() - start
             print(
                 f"elapsed time: {total_time:10.2f} - {len(point_v)/total_time:6.1f} points per second",
@@ -443,3 +526,6 @@ class ITSLIVE_Map:
         self.icon_color_index = 0
         self._map_picked_points_layer_group.clear_layers()
         print("all points cleared")
+
+    def get_zarr_cubes(self):
+        return [(k, v) for k, v in self.open_cubes.items()]
