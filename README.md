@@ -2,7 +2,7 @@
 
 ### A NASA MEaSUREs project to provide automated, low latency, global glacier flow and elevation change datasets
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/nasa-jpl/its_live/main?urlpath=lab/tree/notebooks)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/betolink/its_live/main?urlpath=lab/tree/notebooks)
 
 This repository provides tools for accessing and working with [ITS_LIVE](https://its-live.jpl.nasa.gov/) data.
 
