@@ -86,7 +86,7 @@ class ITSLIVE_Map:
             widget=self._control_plot_button, position="bottomright"
         )
         self._control_coverage_button = ipywidgets.RadioButtons(
-            options=["Landsat 8", "All Satellites"],
+            options=["All Satellites", "Landsat 8"],
             default="All Satellites",
             layout={"width": "max-content"},
             description="Satellite:",
@@ -130,6 +130,8 @@ class ITSLIVE_Map:
         )
         self.map = ipyleaflet.Map(
             basemap=self._map_base_layer,
+            double_click_zoom=False,
+            scroll_wheel_zoom=True,
             center=[64.20, -49.43],
             zoom=3,
             layout=ipywidgets.widgets.Layout(
@@ -334,7 +336,7 @@ class ITSLIVE_Map:
                 """
 
                 icon = ipyleaflet.DivIcon(
-                    html=html_for_marker, icon_anchor=[0, 24], icon_size=[10, 10]
+                    html=html_for_marker, icon_anchor=[0, 0], icon_size=[8, 8]
                 )
                 new_point = ipyleaflet.Marker(
                     location=kwargs.get("coordinates"), icon=icon
