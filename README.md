@@ -1,4 +1,4 @@
-# <span><img src="https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_logo_transparent_wht.png" width="300px" align="middle" /> Notebooks </span>
+<h1><span style="background-color:#1c87c9;"><img src="https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_logo_transparent_wht.png" width="300px" align="middle" />Notebooks </span></h1>
 
 ### A NASA MEaSUREs project to provide automated, low latency, global glacier flow and elevation change datasets
 
