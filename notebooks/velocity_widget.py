@@ -46,7 +46,7 @@ class ITSLIVE:
         self.config = {"plot": "v", "max_separation_days": 90, "color_by": "markers"}
         self._s3fs = s3.S3FileSystem(anon=True)
         self.open_cubes = {}
-        self.outwidget = ipywidgets.Output(layout={"border": "1px solid blue"})
+        # self.outwidget = ipywidgets.Output(layout={"border": "1px solid blue"})
 
         self.color_index = 0
         self.icon_color_index = 0
@@ -156,10 +156,10 @@ class ITSLIVE:
             scroll_wheel_zoom=True,
             center=[64.20, -49.43],
             zoom=3,
-            layout=ipywidgets.widgets.Layout(
-                width="100%",  # Set Width of the map, examples: "100%", "5em", "300px"
-                height="600px",  # Set height of the map
-            ),
+            # layout=ipywidgets.widgets.Layout(
+            #     width="100%",  # Set Width of the map, examples: "100%", "5em", "300px"
+            #     height="100%",  # Set height of the map
+            # ),
         )
         self._map_picked_points_layer_group = ipyleaflet.LayerGroup(
             layers=[], name="Picked points"
@@ -195,9 +195,9 @@ class ITSLIVE:
             self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 6))
             self.sidecar.clear_output()
             with self.sidecar:
-                display(self.outwidget)
-            with self.outwidget:
                 display(self.map)
+            # with self.outwidget:
+            #     display(self.map)
 
     def reload_catalog(self, coverage) -> None:
         self.map.remove_layer(self._map_coverage_layer)
@@ -369,8 +369,8 @@ class ITSLIVE:
                 color = plt.cm.tab10(self.icon_color_index)
                 print(self.icon_color_index, color)
                 html_for_marker = f"""
-                <div style="width: 2rem;height: 2rem; display: block;position: relative;transform: rotate(45deg);"/>
-                  <h1 style="position: relative;left: -3rem;top: -4.0rem;font-size: 4rem;">
+                <div style="width: 3rem;height: 3rem; display: block;position: relative;transform: rotate(45deg);"/>
+                  <h1 style="position: relative;left: -2.5rem;top: -2.5rem;font-size: 3rem;">
                     <span style="color: rgba({color[0]*100}%,{color[1]*100}%,{color[2]*100}%, {color[3]})">
                       <strong>+</strong>
                     </span>
@@ -379,7 +379,7 @@ class ITSLIVE:
                 """
 
                 icon = ipyleaflet.DivIcon(
-                    html=html_for_marker, icon_anchor=[0, 0], icon_size=[8, 8]
+                    html=html_for_marker, icon_anchor=[0, 0], icon_size=[0, 0]
                 )
                 new_point = ipyleaflet.Marker(
                     location=kwargs.get("coordinates"), icon=icon
@@ -395,8 +395,15 @@ class ITSLIVE:
             else:
                 self._last_click = kwargs
 
-    def _plot_by_satellite(self, ins3xr, point_v, ax, map_epsg):
-        sat = np.array([x[0] for x in ins3xr["satellite_img1"].values])
+    def _plot_by_satellite(self, ins3xr, point_v, ax, point_xy, map_epsg):
+        if self._current_catalog == "Landsat 8":
+            print(
+                "To plot by satellite we need to select data from more than one satellite"
+                "Please select 'All Satellites'"
+            )
+            return
+        else:
+            sat = np.array([x[0] for x in ins3xr["satellite_img1"].values])
 
         sats = np.unique(sat)
         sat_plotsym_dict = {
@@ -415,6 +422,32 @@ class ITSLIVE:
         ax.set_ylabel("Speed (m/yr)")
         ax.set_title("Ice flow speed pulled directly from S3")
 
+        if (
+            self.config["max_separation_days"] < 5
+            or self.config["max_separation_days"] > 180
+        ):
+            max_dt = 90
+        else:
+            max_dt = self.config["max_separation_days"]
+
+        if self._control_plot_running_mean_checkbox.value:
+            dt = ins3xr["date_dt"].values
+            # TODO: document this
+            dt = dt.astype(float) * 1.15741e-14
+            runmean, ts = self.runningMean(
+                ins3xr.mid_date[dt < max_dt].values,
+                point_v[dt < max_dt].values,
+                5,
+                30,
+            )
+            ax.plot(
+                ts,
+                runmean,
+                linestyle="-",
+                color=plt.cm.tab10(self.color_index),
+                linewidth=2,
+            )
+
         for satellite in sats[::-1]:
             if any(sat == satellite):
                 ins3xr.mid_date.values[sat == satellite]
@@ -425,7 +458,9 @@ class ITSLIVE:
                     label=sat_label_dict[satellite],
                 )
 
-    def _plot_by_points(self, ins3xr, point_v, ax, map_epsg):
+    def _plot_by_points(self, ins3xr, point_v, ax, point_xy, map_epsg):
+        point_label = f"Point ({round(point_xy[0], 2)}, {round(point_xy[1], 2)})"
+        print(point_xy)
 
         dt = ins3xr["date_dt"].values
         # TODO: document this
@@ -465,6 +500,7 @@ class ITSLIVE:
             marker="o",
             alpha=alpha_value,
             markersize=marker_size,
+            label=point_label,
         )
 
     def plot_point_on_fig(self, point_xy, ax, map_epsg):
@@ -480,19 +516,26 @@ class ITSLIVE:
         else:
             variable = "v"
 
-        ins3xr, point_v, point_tilexy = self.get_timeseries(
+        ins3xr, ds_velocity_point, point_tilexy = self.get_timeseries(
             point_xy, map_epsg, variable
         )  # returns xarray dataset object (used for time axis in plot) and already loaded v time series
         if ins3xr is not None:
             # print(ins3xr)
             if self.config["color_by"] == "satellite":
-                self._plot_by_satellite(ins3xr, point_v, ax, map_epsg)
+                self._plot_by_satellite(
+                    ins3xr, ds_velocity_point, ax, point_xy, map_epsg
+                )
             else:
-                self._plot_by_points(ins3xr, point_v, ax, map_epsg)
-            self._plot_by_points
+                self._plot_by_points(ins3xr, ds_velocity_point, ax, point_xy, map_epsg)
+            plt.tight_layout()
+            handles, labels = plt.gca().get_legend_handles_labels()
+            by_label = dict(zip(labels, handles))
+            plt.legend(
+                by_label.values(), by_label.keys(), loc="upper left", fontsize=10
+            )
             total_time = time.time() - start
             print(
-                f"elapsed time: {total_time:10.2f} - {len(point_v)/total_time:6.1f} points per second",
+                f"elapsed time: {total_time:10.2f} - {len(ds_velocity_point)/total_time:6.1f} points per second",
                 flush=True,
             )
         self.color_index += 1
