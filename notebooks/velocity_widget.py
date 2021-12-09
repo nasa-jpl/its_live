@@ -8,7 +8,6 @@ import ipyleaflet
 import ipywidgets
 import numpy as np
 import pandas as pd
-# import fiona
 import pyproj
 # to get and use geojson datacube catalog
 import s3fs as s3
@@ -42,6 +41,7 @@ class ITSLIVE:
         self.catalog = {
             "l8": "s3://its-live-data.jpl.nasa.gov/datacubes/v01/datacubes_100km_v01.json",
             "all": "s3://its-live-data/test_datacubes/v02/datacubes_catalog.json",
+            "agu21": "s3://its-live-data/test_datacubes/AGU2021/test_datacubes_AGU2021.json",
         }
         self.config = {"plot": "v", "max_separation_days": 90, "color_by": "markers"}
         self._s3fs = s3.S3FileSystem(anon=True)
@@ -57,6 +57,8 @@ class ITSLIVE:
             self._json_all = json.load(incubejson)
         with self._s3fs.open(self.catalog["l8"], "r") as incubejson:
             self._json_l8 = json.load(incubejson)
+        with self._s3fs.open(self.catalog["agu21"], "r") as incubejson:
+            self._json_agu21 = json.load(incubejson)
         self.json_catalog = self._json_all
         self._initialize_widgets()
 
@@ -92,7 +94,7 @@ class ITSLIVE:
             widget=self._control_plot_button, position="bottomright"
         )
         self._control_coverage_button = ipywidgets.RadioButtons(
-            options=["All Satellites", "Landsat 8"],
+            options=["All Satellites", "Landsat 8", "AGU 21"],
             default="All Satellites",
             layout={"width": "max-content"},
             description="Satellite:",
@@ -190,20 +192,23 @@ class ITSLIVE:
 
     def display(self, render_sidecar=True):
 
-        self.sidecar = Sidecar(title="Map Widget")
+        if not hasattr(self, "sidecar"):
+            self.sidecar = Sidecar(title="Map Widget")
+
         if render_sidecar:
             self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 6))
             self.sidecar.clear_output()
             with self.sidecar:
                 display(self.map)
-            # with self.outwidget:
-            #     display(self.map)
 
     def reload_catalog(self, coverage) -> None:
         self.map.remove_layer(self._map_coverage_layer)
         if "Landsat" in coverage["new"]:
             self.json_catalog = self._json_l8
             self._current_catalog = "Landsat 8"
+        elif "AGU" in coverage["new"]:
+            self.json_catalog = self._json_agu21
+            self._current_catalog = "AGU 21"
         else:
             self.json_catalog = self._json_all
             self._current_catalog = "All Satellites"
@@ -422,18 +427,11 @@ class ITSLIVE:
         ax.set_ylabel("Speed (m/yr)")
         ax.set_title("Ice flow speed pulled directly from S3")
 
-        if (
-            self.config["max_separation_days"] < 5
-            or self.config["max_separation_days"] > 180
-        ):
-            max_dt = 90
-        else:
-            max_dt = self.config["max_separation_days"]
-
+        max_dt = self.config["max_separation_days"]
+        dt = ins3xr["date_dt"].values
+        # TODO: document this
+        dt = dt.astype(float) * 1.15741e-14
         if self._control_plot_running_mean_checkbox.value:
-            dt = ins3xr["date_dt"].values
-            # TODO: document this
-            dt = dt.astype(float) * 1.15741e-14
             runmean, ts = self.runningMean(
                 ins3xr.mid_date[dt < max_dt].values,
                 point_v[dt < max_dt].values,
@@ -450,10 +448,9 @@ class ITSLIVE:
 
         for satellite in sats[::-1]:
             if any(sat == satellite):
-                ins3xr.mid_date.values[sat == satellite]
                 ax.plot(
-                    ins3xr.mid_date.values[sat == satellite],
-                    point_v[sat == satellite],
+                    ins3xr["mid_date"][(sat == satellite) & (dt < max_dt)],
+                    point_v[(sat == satellite) & (dt < max_dt)],
                     sat_plotsym_dict[satellite],
                     label=sat_label_dict[satellite],
                 )
@@ -465,13 +462,8 @@ class ITSLIVE:
         dt = ins3xr["date_dt"].values
         # TODO: document this
         dt = dt.astype(float) * 1.15741e-14
-        if (
-            self.config["max_separation_days"] < 5
-            or self.config["max_separation_days"] > 180
-        ):
-            max_dt = 90
-        else:
-            max_dt = self.config["max_separation_days"]
+
+        max_dt = self.config["max_separation_days"]
         # set the maximum image-pair time separation (dt) that will be plotted
         alpha_value = 0.75
         marker_size = 3
