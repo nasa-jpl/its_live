@@ -41,6 +41,7 @@ class ITSLIVE:
         self.catalog = {
             "l8": "s3://its-live-data.jpl.nasa.gov/datacubes/v01/datacubes_100km_v01.json",
             "all": "s3://its-live-data/test_datacubes/v02/datacubes_catalog.json",
+            "agu21": "s3://its-live-data/test_datacubes/AGU2021/test_datacubes_AGU2021.json",
         }
         self.config = {"plot": "v", "max_separation_days": 90, "color_by": "markers"}
         self._s3fs = s3.S3FileSystem(anon=True)
@@ -56,6 +57,8 @@ class ITSLIVE:
             self._json_all = json.load(incubejson)
         with self._s3fs.open(self.catalog["l8"], "r") as incubejson:
             self._json_l8 = json.load(incubejson)
+        with self._s3fs.open(self.catalog["agu21"], "r") as incubejson:
+            self._json_agu21 = json.load(incubejson)
         self.json_catalog = self._json_all
         self._initialize_widgets()
 
@@ -91,7 +94,7 @@ class ITSLIVE:
             widget=self._control_plot_button, position="bottomright"
         )
         self._control_coverage_button = ipywidgets.RadioButtons(
-            options=["All Satellites", "Landsat 8"],
+            options=["All Satellites", "Landsat 8", "AGU 21"],
             default="All Satellites",
             layout={"width": "max-content"},
             description="Satellite:",
@@ -203,6 +206,9 @@ class ITSLIVE:
         if "Landsat" in coverage["new"]:
             self.json_catalog = self._json_l8
             self._current_catalog = "Landsat 8"
+        elif "AGU" in coverage["new"]:
+            self.json_catalog = self._json_agu21
+            self._current_catalog = "AGU 21"
         else:
             self.json_catalog = self._json_all
             self._current_catalog = "All Satellites"
