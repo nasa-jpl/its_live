@@ -7,7 +7,7 @@
 This repository provides tools for accessing and working with [ITS_LIVE](https://its-live.jpl.nasa.gov/) data.
 
 
-[![ITS_LIVE YouTube tutorial]("https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_notebook_velocity_timeseries.jpg)](https://www.youtube.com/embed/G7E7rE5npvg)
+[![ITS_LIVE YouTube tutorial]("https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_notebook_velocity_timeseries.jpg")](https://www.youtube.com/embed/G7E7rE5npvg)
 
 <img src="https://raw.githubusercontent.com/betolink/its_live/main/notebooks/its_live_antarctic_vel.jpg"  width="600px" align="middle" />
 
