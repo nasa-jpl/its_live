@@ -39,11 +39,9 @@ class ITSLIVE:
         Map widget to plot glacier velocities
         """
         self.catalog = {
-            "l8": "s3://its-live-data.jpl.nasa.gov/datacubes/v01/datacubes_100km_v01.json",
-            "all": "s3://its-live-data/test_datacubes/v02/datacubes_catalog.json",
-            "agu21": "s3://its-live-data/test_datacubes/AGU2021/test_datacubes_AGU2021.json",
+            "all": "s3://its-live-data/datacubes/catalog_v02.json"
         }
-        self.config = {"plot": "v", "max_separation_days": 90, "color_by": "markers"}
+        self.config = {"plot": "v", "max_separation_days": 90, "color_by": "points"}
         self._s3fs = s3.S3FileSystem(anon=True)
         self.open_cubes = {}
         # self.outwidget = ipywidgets.Output(layout={"border": "1px solid blue"})
@@ -55,10 +53,6 @@ class ITSLIVE:
         self._current_catalog = "All Satellites"
         with self._s3fs.open(self.catalog["all"], "r") as incubejson:
             self._json_all = json.load(incubejson)
-        with self._s3fs.open(self.catalog["l8"], "r") as incubejson:
-            self._json_l8 = json.load(incubejson)
-        with self._s3fs.open(self.catalog["agu21"], "r") as incubejson:
-            self._json_agu21 = json.load(incubejson)
         self.json_catalog = self._json_all
         self._initialize_widgets()
 
@@ -93,18 +87,7 @@ class ITSLIVE:
         self._control_plot_button_widgcntrl = ipyleaflet.WidgetControl(
             widget=self._control_plot_button, position="bottomright"
         )
-        self._control_coverage_button = ipywidgets.RadioButtons(
-            options=["All Satellites", "Landsat 8", "AGU 21"],
-            default="All Satellites",
-            layout={"width": "max-content"},
-            description="Satellite:",
-            disabled=False,
-        )
 
-        self._control_coverage_button.observe(self.reload_catalog, "value")
-        self._control_coverage_button_widgcntrl = ipyleaflet.WidgetControl(
-            widget=self._control_coverage_button, position="bottomright"
-        )
         image = Image(
             (
                 "https://its-live-data.s3.amazonaws.com/documentation/"
@@ -183,7 +166,6 @@ class ITSLIVE:
         self.map.add_control(ipyleaflet.LayersControl())
         self.map.add_control(ipyleaflet.ScaleControl(position="bottomleft"))
         self.map.add_control(self._control_plot_running_mean_widgcntrl)
-        self.map.add_control(self._control_coverage_button_widgcntrl)
         self.map.add_control(self._control_clear_points_button_widgcntrl)
         self.map.add_control(self._control_plot_button_widgcntrl)
         self.map.add_control(self._control_logo_widgcntrl)
@@ -201,34 +183,6 @@ class ITSLIVE:
             with self.sidecar:
                 display(self.map)
 
-    def reload_catalog(self, coverage) -> None:
-        self.map.remove_layer(self._map_coverage_layer)
-        if "Landsat" in coverage["new"]:
-            self.json_catalog = self._json_l8
-            self._current_catalog = "Landsat 8"
-        elif "AGU" in coverage["new"]:
-            self.json_catalog = self._json_agu21
-            self._current_catalog = "AGU 21"
-        else:
-            self.json_catalog = self._json_all
-            self._current_catalog = "All Satellites"
-        self._map_coverage_layer = ipyleaflet.GeoJSON(
-            data=self.json_catalog,
-            name="ITS_LIVE datacube coverage",
-            style={
-                "opacity": 0.8,
-                "fillOpacity": 0.2,
-                "weight": 1,
-                "color": "red",
-                "cursor": "crosshair",
-            },
-            hover_style={
-                "color": "white",
-                "dashArray": "0",
-                "fillOpacity": 0.5,
-            },
-        )
-        self.map.add_layer(self._map_coverage_layer)
 
     def get_timeseries(self, point_xy, point_epsg_str, variable):
 
@@ -401,14 +355,11 @@ class ITSLIVE:
                 self._last_click = kwargs
 
     def _plot_by_satellite(self, ins3xr, point_v, ax, point_xy, map_epsg):
-        if self._current_catalog == "Landsat 8":
-            print(
-                "To plot by satellite we need to select data from more than one satellite"
-                "Please select 'All Satellites'"
-            )
-            return
-        else:
+     
+        try:
             sat = np.array([x[0] for x in ins3xr["satellite_img1"].values])
+        except:
+            sat = np.array([str(int(x)) for x in ins3xr["satellite_img1"].values])
 
         sats = np.unique(sat)
         sat_plotsym_dict = {
@@ -425,7 +376,7 @@ class ITSLIVE:
 
         ax.set_xlabel("Date")
         ax.set_ylabel("Speed (m/yr)")
-        ax.set_title("Ice flow speed pulled directly from S3")
+        ax.set_title("ITS_LIVE Ice Flow Speed m/yr")
 
         max_dt = self.config["max_separation_days"]
         dt = ins3xr["date_dt"].values
@@ -539,7 +490,7 @@ class ITSLIVE:
         self.ax.set_xlabel("date")
         self.ax.set_ylabel("speed (m/yr)")
         self.ax.set_title(
-            f"{self._current_catalog} ITS_LIVE ice flow speed (Zarr cube from S3 bucket)"
+            "ITS_LIVE Ice Flow Speed m/yr"
         )
         self.fig.tight_layout()
         self.color_index = 0
