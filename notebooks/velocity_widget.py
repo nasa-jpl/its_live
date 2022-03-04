@@ -365,13 +365,21 @@ class ITSLIVE:
         sat_plotsym_dict = {
             "1": "r+",
             "2": "b+",
+            "4": "y+",
+            "5": "y+",
+            "7": "c+",
             "8": "g+",
+            "9": "m+",
         }
 
         sat_label_dict = {
             "1": "Sentinel 1",
             "2": "Sentinel 2",
+            "4": "Landsat 4",
+            "5": "Landsat 5",
+            "7": "Landsat 7",
             "8": "Landsat 8",
+            "9": "Landsat 9",
         }
 
         ax.set_xlabel("Date")
