@@ -19,10 +19,8 @@ from matplotlib import pyplot as plt
 from shapely import geometry
 from sidecar import Sidecar
 
-
-class timeseriesException(Exception):
-    print(traceback.format_exc())
-    pass
+# import itslive datacube tools for working with cloun-based datacubes
+from datacube_tools import DATACUBETOOLS as dctools
 
 
 class ITSLIVE:
@@ -38,22 +36,14 @@ class ITSLIVE:
         """
         Map widget to plot glacier velocities
         """
-        self.catalog = {
-            "all": "s3://its-live-data/datacubes/catalog_v02.json"
-        }
+        
+        self.dct = dctools() # initializes geojson catalog and open cubes list for this object
         self.config = {"plot": "v", "max_separation_days": 90, "color_by": "points"}
-        self._s3fs = s3.S3FileSystem(anon=True)
-        self.open_cubes = {}
-        # self.outwidget = ipywidgets.Output(layout={"border": "1px solid blue"})
 
         self.color_index = 0
         self.icon_color_index = 0
         self._last_click = None
 
-        self._current_catalog = "All Satellites"
-        with self._s3fs.open(self.catalog["all"], "r") as incubejson:
-            self._json_all = json.load(incubejson)
-        self.json_catalog = self._json_all
         self._initialize_widgets()
 
     def set_config(self, config):
@@ -120,7 +110,7 @@ class ITSLIVE:
             }
         )
         self._map_coverage_layer = ipyleaflet.GeoJSON(
-            data=self.json_catalog,
+            data=self.dct.json_catalog,
             name="ITS_LIVE datacube coverage",
             style={
                 "opacity": 0.8,
@@ -184,101 +174,6 @@ class ITSLIVE:
                 display(self.map)
 
 
-    def get_timeseries(self, point_xy, point_epsg_str, variable):
-
-        start = time.time()
-
-        if point_epsg_str != "4326":
-            # point not in lon,lat, set up transformation and convert it to lon,lat (epsg:4326)
-            inPROJtoLL = pyproj.Transformer.from_proj(
-                f"epsg:{point_epsg_str}", "epsg:4326", always_xy=True
-            )
-            pointll = inPROJtoLL.transform(*point_xy)
-        else:
-            # point already lon,lat
-            pointll = point_xy
-
-        # create Shapely point object for inclusion test
-        point = geometry.Point(*pointll)  # point.coords.xy
-
-        # find datacube outline that contains this point in geojson index file
-        cubef = None
-
-        # TODO: this should be done via the API
-        for f in self.json_catalog["features"]:
-            polygeom = geometry.shape(f["geometry"])
-            if polygeom.contains(point):
-                cubef = f
-                break
-
-        if cubef:
-            print(
-                f"found datacube - elapsed time: {(time.time()-start):10.2f}",
-                flush=True,
-            )
-
-            if point_epsg_str == cubef["properties"]["data_epsg"]:
-                point_tilexy = point_xy
-            else:
-                inPROJtoTilePROJ = pyproj.Transformer.from_proj(
-                    f"epsg:{point_epsg_str}",
-                    cubef["properties"]["data_epsg"],
-                    always_xy=True,
-                )
-                point_tilexy = inPROJtoTilePROJ.transform(*point_xy)
-
-            print(
-                f"original xy {point_xy} {point_epsg_str} maps to datacube {point_tilexy} "
-                f" {cubef['properties']['data_epsg']}"
-            )
-
-            # now test if point is in xy box for cube (should be most of the time; could fail
-            # because of boundary curvature 4326 box defined by lon,lat corners but point chosen in basemap projection)
-            point_tilexy_shapely = geometry.Point(*point_tilexy)
-            polygeomxy = geometry.shape(cubef["properties"]["geometry_epsg"])
-            if not polygeomxy.contains(point_tilexy_shapely):
-                raise timeseriesException(
-                    f"point is in lat,lon box but not {cubef['properties']['data_epsg']} box!!"
-                )
-
-            # for zarr store modify URL for use in boto open - change http: to s3: and lose s3.amazonaws.com
-            incubeurl = (
-                cubef["properties"]["zarr_url"]
-                .replace("http:", "s3:")
-                .replace(".s3.amazonaws.com", "")
-            )
-
-            # if we have already opened this cube, don't do it again
-            if len(self.open_cubes) > 0 and incubeurl in self.open_cubes.keys():
-                ins3xr = self.open_cubes[incubeurl]
-            else:
-                ins3xr = xr.open_dataset(
-                    incubeurl, engine="zarr", storage_options={"anon": True}
-                )
-                self.open_cubes[incubeurl] = ins3xr
-
-            pt_variable = ins3xr[variable].sel(
-                x=point_tilexy[0], y=point_tilexy[1], method="nearest"
-            )
-
-            print(
-                f"xarray open - elapsed time: {(time.time()-start):10.2f}", flush=True
-            )
-
-            pt_variable.load()
-
-            print(
-                f"time series loaded {len(pt_variable)} points - elapsed time: {(time.time()-start):10.2f}",
-                flush=True,
-            )
-            # end for zarr store
-
-            return (ins3xr, pt_variable, point_tilexy)
-
-        else:
-            # raise timeseriesException(f"no datacube found for point {pointll}")
-            print(f"No data for point {pointll}")
-            return (None, None, None)
 
     # running mean
     def runningMean(
@@ -467,10 +362,12 @@ class ITSLIVE:
         else:
             variable = "v"
 
-        ins3xr, ds_velocity_point, point_tilexy = self.get_timeseries(
-            point_xy, map_epsg, variable
-        )  # returns xarray dataset object (used for time axis in plot) and already loaded v time series
+        ins3xr, ds_point, point_tilexy = self.dct.get_timeseries_at_point(point_xy, map_epsg, variables=[variable])
         if ins3xr is not None:
+            ds_velocity_point = ds_point[variable] 
+            # dct.get_timeseries_at_point returns dataset, extract dataArray for variable from it for plotting
+            # returns xarray dataset object (used for time axis in plot) and already loaded v time series
+           
             # print(ins3xr)
             if self.config["color_by"] == "satellite":
                 self._plot_by_satellite(
@@ -521,5 +418,5 @@ class ITSLIVE:
         self._map_picked_points_layer_group.clear_layers()
         print("all points cleared")
 
-    def get_zarr_cubes(self):
-        return [(k, v) for k, v in self.open_cubes.items()]
+#     def get_zarr_cubes(self):
+#         return [(k, v) for k, v in self.open_cubes.items()]
