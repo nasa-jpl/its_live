@@ -300,7 +300,7 @@ class DATACUBETOOLS:
         ly = ins3xr.coords["y"]
         
         start = time.time()
-        small_ins3xr = ins3xr[["v", "vx", "vy"]].loc[
+        small_ins3xr = ins3xr[variables].loc[
             dict(
                 x=lx[(lx > pt_tx - half_distance) & (lx < pt_tx + half_distance)],
                 y=ly[(ly > pt_ty - half_distance) & (ly < pt_ty + half_distance)],
