@@ -6,7 +6,7 @@
 
 This repository provides tools for accessing and working with [ITS_LIVE](https://its-live.jpl.nasa.gov/) data.
 
-**Example Notebook**
+**Notebook**
 
 ![ITS_LIVE NoteBook](https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_notebook.gif)
 
