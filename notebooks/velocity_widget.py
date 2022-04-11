@@ -38,7 +38,7 @@ class ITSLIVE:
         """
         
         self.dct = dctools() # initializes geojson catalog and open cubes list for this object
-        self.config = {"plot": "v", "max_separation_days": 90, "color_by": "points"}
+        self.config = {"plot": "v", "min_separation_days":5, "max_separation_days": 90, "color_by": "points"}
 
         self.color_index = 0
         self.icon_color_index = 0
@@ -282,13 +282,14 @@ class ITSLIVE:
         ax.set_title("ITS_LIVE Ice Flow Speed m/yr")
 
         max_dt = self.config["max_separation_days"]
+        min_dt = self.config["min_separation_days"]
         dt = ins3xr["date_dt"].values
         # TODO: document this
         dt = dt.astype(float) * 1.15741e-14
         if self._control_plot_running_mean_checkbox.value:
             runmean, ts = self.runningMean(
-                ins3xr.mid_date[dt < max_dt].values,
-                point_v[dt < max_dt].values,
+                ins3xr.mid_date[(dt >= min_dt) & (dt <= max_dt)].values,
+                point_v[(dt >= min_dt) & (dt <= max_dt)].values,
                 5,
                 30,
             )
@@ -303,8 +304,8 @@ class ITSLIVE:
         for satellite in sats[::-1]:
             if any(sat == satellite):
                 ax.plot(
-                    ins3xr["mid_date"][(sat == satellite) & (dt < max_dt)],
-                    point_v[(sat == satellite) & (dt < max_dt)],
+                    ins3xr["mid_date"][(sat == satellite) & (dt >= min_dt) & (dt <= max_dt)],
+                    point_v[(sat == satellite) & (dt >= min_dt) & (dt <= max_dt)],
                     sat_plotsym_dict[satellite],
                     label=sat_label_dict[satellite],
                 )
@@ -318,6 +319,7 @@ class ITSLIVE:
         dt = dt.astype(float) * 1.15741e-14
 
         max_dt = self.config["max_separation_days"]
+        min_dt = self.config["min_separation_days"]
         # set the maximum image-pair time separation (dt) that will be plotted
         alpha_value = 0.75
         marker_size = 3
@@ -325,8 +327,8 @@ class ITSLIVE:
             alpha_value = 0.25
             marker_size = 2
             runmean, ts = self.runningMean(
-                ins3xr.mid_date[dt < max_dt].values,
-                point_v[dt < max_dt].values,
+                ins3xr.mid_date[(dt >= min_dt) & (dt <= max_dt)].values,
+                point_v[(dt >= min_dt) & (dt <= max_dt)].values,
                 5,
                 30,
             )
@@ -338,8 +340,8 @@ class ITSLIVE:
                 linewidth=2,
             )
         ax.plot(
-            ins3xr.mid_date[dt < max_dt],
-            point_v[dt < max_dt],
+            ins3xr.mid_date[(dt >= min_dt) & (dt <= max_dt)],
+            point_v[(dt >= min_dt) & (dt <= max_dt)],
             linestyle="None",
             markeredgecolor=plt.cm.tab10(self.color_index),
             markerfacecolor=plt.cm.tab10(self.color_index),
