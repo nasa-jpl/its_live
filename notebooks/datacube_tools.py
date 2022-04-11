@@ -222,7 +222,7 @@ class DATACUBETOOLS:
         start = time.time()
             
         cube_feature,point_cubexy = self.find_datacube_catalog_entry_for_point(point_xy, point_epsg_str)
-        
+            
         # for zarr store modify URL for use in boto open - change http: to s3: and lose s3.amazonaws.com
         incubeurl = (
             cube_feature["properties"]["zarr_url"]
@@ -260,6 +260,22 @@ class DATACUBETOOLS:
 
         return (ins3xr, pt_datset, point_cubexy)
           
+
+
+    def set_mapping_for_small_cube_from_larger_one(self, smallcube, largecube):
+        """ when a subset is pulled from an ITS_LIVE datacube, a new geotransform needs to be 
+        figured out from the smallcube's x and y coordinates and stored in the GeoTransform attribute 
+        of the mapping variable (which also needs to be copied from the original cube)
+        """
+        largecube_gt = [float(x) for x in largecube.mapping.GeoTransform.split(" ")]
+        smallcube_gt = largecube_gt  # need to change corners still
+        # find UL corner of UL pixel (x and y are pixel center coordinates)
+        smallcube_gt[0] = smallcube.x.min().item() - ( smallcube_gt[1] / 2.0 )  # set new ul x value
+        smallcube_gt[3] = smallcube.y.max().item() - ( smallcube_gt[5] / 2.0 )  # set new ul y value
+        smallcube[ "mapping" ] = largecube.mapping  # still need to add new GeoTransform as string
+        smallcube.mapping["GeoTransform"] = " ".join([str(x) for x in smallcube_gt])
+        return
+
 
     def get_subcube_around_point(self, point_xy, point_epsg_str, half_distance = 5000.0, variables=['v']):
         """pulls subset of cube within half_distance of point (unless edge of cube is included) containing specified variables:
@@ -315,20 +331,77 @@ class DATACUBETOOLS:
         return (ins3xr, small_ins3xr, point_cubexy)            
             
             
-    def set_mapping_for_small_cube_from_larger_one(self, smallcube, largecube):
-        """ when a subset is pulled from an ITS_LIVE datacube, a new geotransform needs to be 
-        figured out from the smallcube's x and y coordinates and stored in the GeoTransform attribute 
-        of the mapping variable (which also needs to be copied from the original cube)
-        """
-        largecube_gt = [float(x) for x in largecube.mapping.GeoTransform.split(" ")]
-        smallcube_gt = largecube_gt  # need to change corners still
-        # find UL corner of UL pixel (x and y are pixel center coordinates)
-        smallcube_gt[0] = smallcube.x.min().item() - ( smallcube_gt[1] / 2.0 )  # set new ul x value
-        smallcube_gt[3] = smallcube.y.max().item() - ( smallcube_gt[5] / 2.0 )  # set new ul y value
-        smallcube[ "mapping" ] = largecube.mapping  # still need to add new GeoTransform as string
-        smallcube.mapping["GeoTransform"] = " ".join([str(x) for x in smallcube_gt])
+
+    def get_subcube_for_bounding_box(self, bbox, bbox_epsg_str, variables=['v']):
+        """pulls subset of cube within bbox (unless edge of cube is included) containing specified variables:
+        - calls find_datacube to determine which S3-based datacube the bbox central point is in, 
+        - opens that xarray datacube - which is also added to the open_cubes list, so that it won't need to be reopened (which can take O(5 sec) ),
+        - extracts smaller cube containing full time series of specified variables
         
-        return
+        bbox = [ minx, miny, maxx, maxy ] in bbox_epsg_str meters
+        bbox_epsg_str = '3413', '32607', '3031', ... (EPSG:xxxx) projection identifier
+        variables = [ 'v', 'vx', 'vy', ...] variables in datacube - note 'mapping' is returned by default, with updated geotransform attribute for the new subcube size
+        
+        returns(
+            - xarray of open full cube (not loaded locally, but coordinate vectors and attributes for full cube are),
+            - smaller cube as xarray (loaded to memory), 
+            - original bbox central point xy in datacube's projection
+            )
+        """
+        
+
+        start = time.time()
+        
+        #
+        # derived from point/distance (get_subcube_around_point) so first iteration uses central point to look up datacube to open
+        # subcube will still be clipped at datacube edge if bbox extends to other datacubes - in future maybe return subcubes from each?
+        #
+        # bbox is probably best expressed in datacube epsg - will fail if different...  in future, deal with this some other way.
+        #
+        
+        bbox_minx, bbox_miny, bbox_maxx, bbox_maxy = bbox
+        bbox_centrer_point_xy = [(bbox_minx + bbox_maxx)/2.0, (bbox_miny + bbox_maxy)/2.0]
+        cube_feature, bbox_centrer_point_cubexy = self.find_datacube_catalog_entry_for_point(bbox_centrer_point_xy, bbox_epsg_str)
+        
+        if (cube_feature["properties"]["data_epsg"].split(":")[-1] != bbox_epsg_str) :
+            print(f'bbox is in epsg:{bbox_epsg_str}, should be in datacube {cube_feature["properties"]["data_epsg"]}')
+            return (None)
+        
+        # for zarr store modify URL for use in boto open - change http: to s3: and lose s3.amazonaws.com
+        incubeurl = (
+            cube_feature["properties"]["zarr_url"]
+            .replace("http:", "s3:")
+            .replace(".s3.amazonaws.com", "")
+        )
+
+        # if we have already opened this cube, don't open it again
+        if len(self.open_cubes) > 0 and incubeurl in self.open_cubes.keys():
+            ins3xr = self.open_cubes[incubeurl]
+        else:
+            # open zarr format xarray datacube on AWS S3
+            ins3xr = xr.open_dataset(
+                incubeurl, engine="zarr", storage_options={"anon": True}
+            )
+            self.open_cubes[incubeurl] = ins3xr
+        
+        
+        lx = ins3xr.coords["x"]
+        ly = ins3xr.coords["y"]
+        
+        start = time.time()
+        small_ins3xr = ins3xr[variables].loc[
+            dict(
+                x=lx[(lx >= bbox_minx) & (lx <= bbox_maxx)],
+                y=ly[(ly >= bbox_miny) & (ly <= bbox_maxy)],
+            )
+        ].load()
+        print(f'subset and load at {time.time() - start:6.2f} seconds', flush=True )
+
+        
+        # now fix the CF compliant geolocation/mapping of the smaller cube
+        self.set_mapping_for_small_cube_from_larger_one(small_ins3xr, ins3xr)
+        
+        return (ins3xr, small_ins3xr, bbox_centrer_point_cubexy)            
             
             
             
