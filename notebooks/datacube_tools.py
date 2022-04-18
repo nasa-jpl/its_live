@@ -41,6 +41,7 @@ class DATACUBETOOLS:
         # the URL for the current datacube catalog GeoJSON file - set up as dictionary to allow other catalogs for testing
         self.catalog = {
             "all": "s3://its-live-data/datacubes/catalog_v02.json",
+            "test": ""
         }
 
         # S3fs used to access cubes in python
@@ -107,25 +108,26 @@ class DATACUBETOOLS:
             point_cubexy_shapely = geometry.Point(*point_cubexy)
             polygeomxy = geometry.shape(cubefeature["properties"]["geometry_epsg"])
             if not polygeomxy.contains(point_cubexy_shapely):
-                # point is in lat lon box, but not in cube-projection's box
-                # try once more to find proper cube by using a new point in cube projection moved 10 km farther from closest
-                # boundary in cube projection; use new point's lat lon to search for new cube - test if old point is in that
-                # new cube's projection box, otherwise ...
-                
-                # this next section tries one more time to find new feature after offsetting point farther outside box of 
-                # first cube, in cube projection, to deal with curvature of lat lon box edges in different projections
-                #
-                # point in ll box but not cube_projection box, move point in cube projection
-                # 10 km farther outside box, find new ll value for point, find new feature it is in,
-                # and check again if original point falls in this new cube's 
-                
-                # first find cube proj bounding box, then move coordinate of point outside this box farther out by 10 km
+                # first find cube proj bounding box
                 dcbbox = np.array(cubefeature["properties"]["geometry_epsg"]["coordinates"][0])
                 minx = np.min(dcbbox[:, 0])
                 maxx = np.max(dcbbox[:, 0])
                 miny = np.min(dcbbox[:, 1])
                 maxy = np.max(dcbbox[:, 1])
 
+                # point is in lat lon box, but not in cube-projection's box
+                # try once more to find proper cube by using a new point in cube projection moved 10 km farther from closest
+                # boundary in cube projection; use new point's lat lon to search for new cube - test if old point is in that
+                # new cube's projection box, otherwise ...
+            
+                # this next section tries one more time to find new feature after offsetting point farther outside box of 
+                # first cube, in cube projection, to deal with curvature of lat lon box edges in different projections
+                #
+                # point in ll box but not cube_projection box, move point in cube projection
+                # 10 km farther outside box, find new ll value for point, find new feature it is in,
+                # and check again if original point falls in this new cube's 
+            
+                # move coordinate of point outside this box farther out by 10 km
 
                 newpoint_cubexy = list(point_cubexy)
                 if point_cubexy[1] < miny:
@@ -137,9 +139,19 @@ class DATACUBETOOLS:
                 elif point_cubexy[0] > maxx:
                     newpoint_cubexy[0] += 10000.0
                 else:
-                    # should never get here based on point not in box test at start
-                    pass
-                
+                    # no change has been made to newpoint_cubexy because
+                    # user has chosen a point exactly on the boundary, move it 1 m into the box...
+                    print('user has chosen a point exactly on the boundary, move it 1 m into the box...')
+                    if point_cubexy[1] == miny:
+                        newpoint_cubexy[1] += 1.0
+                    elif point_cubexy[1] == maxy:
+                        newpoint_cubexy[1] -= 1.0
+                    elif point_cubexy[0] == minx:
+                        newpoint_cubexy[0] += 1.0
+                    elif point_cubexy[0] == maxx:
+                        newpoint_cubexy[0] -= 1.0                   
+
+            
                 # now reproject this point to lat lon and look for new feature
 
                 cubePROJtoLL = pyproj.Transformer.from_proj(
@@ -163,7 +175,7 @@ class DATACUBETOOLS:
                     # if new feature found, see if original (not offset) point is in this new cube's cube-projection bounding box
                     # find point x and y in cube native epsg if not already in that projection
                     if cubefeature["properties"]["data_epsg"] == newcubefeature["properties"]["data_epsg"]:
-                        pass   # point_cubexy stays the same for the original point
+                        point_cubexy = newpoint_cubexy
                     else:
                         # project original point in this new cube's projection
                         inPROJtoTilePROJ = pyproj.Transformer.from_proj(
@@ -174,7 +186,7 @@ class DATACUBETOOLS:
                         point_cubexy = inPROJtoTilePROJ.transform(*point_xy)
 
                     print(
-                        f"try 2 original xy {point_xy} {point_epsg_str} whn offset maps to new datacube {point_cubexy} "
+                        f"try 2 original xy {point_xy} {point_epsg_str} with offset maps to new datacube {point_cubexy} "
                         f" {newcubefeature['properties']['data_epsg']}"
                     )
 
@@ -187,7 +199,7 @@ class DATACUBETOOLS:
                         # try once more to find proper cube by using a new point in cube projection moved 10 km farther from closest
                         # boundary in cube projection; use new point's lat lon to search for new cube - test if old point is in that
                         # new cube's projection box, otherwise fail...
-        
+    
                         raise timeseriesException(
                             f"point is in lat,lon box but not {cubefeature['properties']['data_epsg']} box!! even after offset"
                         )
