@@ -1,23 +1,15 @@
-# for leaflet global map
-import json
 # for timing data access
 import time
-import traceback
 
 import ipyleaflet
 import ipywidgets
 import numpy as np
 import pandas as pd
-import pyproj
 # to get and use geojson datacube catalog
-import s3fs as s3
 # for datacube xarray/zarr access
-import xarray as xr
 from IPython.display import Image, display
 # for plotting time series
 from matplotlib import pyplot as plt
-from shapely import geometry
-from sidecar import Sidecar
 
 # import itslive datacube tools for working with cloun-based datacubes
 from datacube_tools import DATACUBETOOLS as dctools
@@ -36,9 +28,16 @@ class ITSLIVE:
         """
         Map widget to plot glacier velocities
         """
-        
-        self.dct = dctools() # initializes geojson catalog and open cubes list for this object
-        self.config = {"plot": "v", "min_separation_days":5, "max_separation_days": 90, "color_by": "points"}
+        self.dct = (
+            dctools()
+        )  # initializes geojson catalog and open cubes list for this object
+        self.config = {
+            "plot": "v",
+            "min_separation_days": 5,
+            "max_separation_days": 90,
+            "color_by": "points",
+            "verbose": False,
+        }
 
         self.color_index = 0
         self.icon_color_index = 0
@@ -144,7 +143,7 @@ class ITSLIVE:
 
         self.map.add_layer(self._map_picked_points_layer_group)
         self.map.add_layer(self._map_velocity_layer)
-        self.map.add_layer(self._map_coverage_layer)
+        # self.map.add_layer(self._map_coverage_layer)
         self.map.add_control(
             ipyleaflet.MeasureControl(
                 position="topleft",
@@ -164,16 +163,17 @@ class ITSLIVE:
 
     def display(self, render_sidecar=True):
 
-        if not hasattr(self, "sidecar"):
-            self.sidecar = Sidecar(title="Map Widget")
-
+        self.fig, self.ax = plt.subplots(1, 1, figsize=(9, 4))
         if render_sidecar:
-            self.fig, self.ax = plt.subplots(1, 1, figsize=(10, 6))
+            from sidecar import Sidecar
+
+            if not hasattr(self, "sidecar"):
+                self.sidecar = Sidecar(title="Map Widget")
             self.sidecar.clear_output()
             with self.sidecar:
                 display(self.map)
-
-
+        else:
+            display(self.map)
 
     # running mean
     def runningMean(
@@ -221,11 +221,13 @@ class ITSLIVE:
                 kwargs.get("coordinates") == self._last_click.get("coordinates")
             ):
                 color = plt.cm.tab10(self.icon_color_index)
-                print(self.icon_color_index, color)
+                if self.config["verbose"]:
+                    print(self.icon_color_index, color)
                 html_for_marker = f"""
-                <div style="width: 3rem;height: 3rem; display: block;position: relative;transform: rotate(45deg);"/>
-                  <h1 style="position: relative;left: -2.5rem;top: -2.5rem;font-size: 3rem;">
-                    <span style="color: rgba({color[0]*100}%,{color[1]*100}%,{color[2]*100}%, {color[3]})">
+                <div>
+                  <h1 style="position: absolute;left: -0.2em; top: -2.5rem; font-size: 2rem;">
+                    <span style="color: rgba({color[0]*100}%,{color[1]*100}%,{color[2]*100}%, {color[3]});
+                        width: 2rem;height: 2rem; display: block;position: relative;transform: rotate(45deg);">
                       <strong>+</strong>
                     </span>
                   </h1>
@@ -242,15 +244,17 @@ class ITSLIVE:
                 # added points are tracked (color/symbol assigned) by the order they are added to the layer_group
                 # (each point/icon is a layer by itself in ipyleaflet)
                 self._map_picked_points_layer_group.add_layer(new_point)
-                print(f"point added {kwargs.get('coordinates')}")
+
+                if self.config["verbose"]:
+                    print(f"point added {kwargs.get('coordinates')}")
                 self.icon_color_index += 1
                 # if icon_color_index>=len(colornames):
                 #    icon_color_index=0
             else:
                 self._last_click = kwargs
 
-    def _plot_by_satellite(self, ins3xr, point_v, ax, point_xy, map_epsg):
-     
+    def _plot_by_satellite(self, ins3xr, point_v, point_xy, map_epsg):
+
         try:
             sat = np.array([x[0] for x in ins3xr["satellite_img1"].values])
         except:
@@ -277,9 +281,9 @@ class ITSLIVE:
             "9": "Landsat 9",
         }
 
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Speed (m/yr)")
-        ax.set_title("ITS_LIVE Ice Flow Speed m/yr")
+        self.ax.set_xlabel("Date")
+        self.ax.set_ylabel("Speed (m/yr)")
+        self.ax.set_title("ITS_LIVE Ice Flow Speed m/yr")
 
         max_dt = self.config["max_separation_days"]
         min_dt = self.config["min_separation_days"]
@@ -293,7 +297,7 @@ class ITSLIVE:
                 5,
                 30,
             )
-            ax.plot(
+            self.ax.plot(
                 ts,
                 runmean,
                 linestyle="-",
@@ -303,16 +307,19 @@ class ITSLIVE:
 
         for satellite in sats[::-1]:
             if any(sat == satellite):
-                ax.plot(
-                    ins3xr["mid_date"][(sat == satellite) & (dt >= min_dt) & (dt <= max_dt)],
+                self.ax.plot(
+                    ins3xr["mid_date"][
+                        (sat == satellite) & (dt >= min_dt) & (dt <= max_dt)
+                    ],
                     point_v[(sat == satellite) & (dt >= min_dt) & (dt <= max_dt)],
                     sat_plotsym_dict[satellite],
                     label=sat_label_dict[satellite],
                 )
 
-    def _plot_by_points(self, ins3xr, point_v, ax, point_xy, map_epsg):
+    def _plot_by_points(self, ins3xr, point_v, point_xy, map_epsg):
         point_label = f"Point ({round(point_xy[0], 2)}, {round(point_xy[1], 2)})"
-        print(point_xy)
+        if self.config["verbose"]:
+            print(point_xy)
 
         dt = ins3xr["date_dt"].values
         # TODO: document this
@@ -332,14 +339,14 @@ class ITSLIVE:
                 5,
                 30,
             )
-            ax.plot(
+            self.ax.plot(
                 ts,
                 runmean,
                 linestyle="-",
                 color=plt.cm.tab10(self.color_index),
                 linewidth=2,
             )
-        ax.plot(
+        self.ax.plot(
             ins3xr.mid_date[(dt >= min_dt) & (dt <= max_dt)],
             point_v[(dt >= min_dt) & (dt <= max_dt)],
             linestyle="None",
@@ -351,32 +358,32 @@ class ITSLIVE:
             label=point_label,
         )
 
-    def plot_point_on_fig(self, point_xy, ax, map_epsg):
+    def plot_point_on_fig(self, point_xy, map_epsg):
 
         # pointxy is [x,y] coordinate in mapfig projection (map_epsg below), nax is plot axis for time series plot
         start = time.time()
-        print(
-            f"fetching timeseries for point x={point_xy[0]:10.2f} y={point_xy[1]:10.2f}",
-            flush=True,
-        )
+        if self.config["verbose"]:
+            print(
+                f"fetching timeseries for point x={point_xy[0]:10.2f} y={point_xy[1]:10.2f}",
+                flush=True,
+            )
         if "plot" in self.config:
             variable = self.config["plot"]
         else:
             variable = "v"
 
-        ins3xr, ds_point, point_tilexy = self.dct.get_timeseries_at_point(point_xy, map_epsg, variables=[variable])
+        ins3xr, ds_point, point_tilexy = self.dct.get_timeseries_at_point(
+            point_xy, map_epsg, variables=[variable]
+        )
         if ins3xr is not None:
-            ds_velocity_point = ds_point[variable] 
+            ds_velocity_point = ds_point[variable]
             # dct.get_timeseries_at_point returns dataset, extract dataArray for variable from it for plotting
             # returns xarray dataset object (used for time axis in plot) and already loaded v time series
-           
-            # print(ins3xr)
+
             if self.config["color_by"] == "satellite":
-                self._plot_by_satellite(
-                    ins3xr, ds_velocity_point, ax, point_xy, map_epsg
-                )
+                self._plot_by_satellite(ins3xr, ds_velocity_point, point_xy, map_epsg)
             else:
-                self._plot_by_points(ins3xr, ds_velocity_point, ax, point_xy, map_epsg)
+                self._plot_by_points(ins3xr, ds_velocity_point, point_xy, map_epsg)
             plt.tight_layout()
             handles, labels = plt.gca().get_legend_handles_labels()
             by_label = dict(zip(labels, handles))
@@ -384,10 +391,11 @@ class ITSLIVE:
                 by_label.values(), by_label.keys(), loc="upper left", fontsize=10
             )
             total_time = time.time() - start
-            print(
-                f"elapsed time: {total_time:10.2f} - {len(ds_velocity_point)/total_time:6.1f} points per second",
-                flush=True,
-            )
+            if self.config["verbose"]:
+                print(
+                    f"elapsed time: {total_time:10.2f} - {len(ds_velocity_point)/total_time:6.1f} points per second",
+                    flush=True,
+                )
         self.color_index += 1
 
     def plot_time_series(self, *args, **kwargs):
@@ -396,9 +404,7 @@ class ITSLIVE:
         self.ax.clear()
         self.ax.set_xlabel("date")
         self.ax.set_ylabel("speed (m/yr)")
-        self.ax.set_title(
-            "ITS_LIVE Ice Flow Speed m/yr"
-        )
+        self.ax.set_title("ITS_LIVE Ice Flow Speed m/yr")
         self.fig.tight_layout()
         self.color_index = 0
 
@@ -406,10 +412,14 @@ class ITSLIVE:
             a.location for a in self._map_picked_points_layer_group.layers
         ]
         if len(picked_points_latlon) > 0:
-            print("Plotting...")
+            if self.config["verbose"]:
+                print("Plotting...")
             for lat, lon in picked_points_latlon:
-                self.plot_point_on_fig([lon, lat], self.ax, "4326")
-            print("done plotting")
+                self.plot_point_on_fig([lon, lat], "4326")
+            if self.config["verbose"]:
+                print("done plotting")
+            self.fig.canvas.draw()
+            # plt.show()
         else:
             print("no picked points to plot yet - pick some!")
 
@@ -419,6 +429,3 @@ class ITSLIVE:
         self.icon_color_index = 0
         self._map_picked_points_layer_group.clear_layers()
         print("all points cleared")
-
-#     def get_zarr_cubes(self):
-#         return [(k, v) for k, v in self.open_cubes.items()]
