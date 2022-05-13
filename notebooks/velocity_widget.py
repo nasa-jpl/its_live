@@ -42,6 +42,7 @@ class ITSLIVE:
         self.color_index = 0
         self.icon_color_index = 0
         self._last_click = None
+        self.fig, self.ax = plt.subplots(1, 1)
 
         self._initialize_widgets()
 
@@ -77,20 +78,6 @@ class ITSLIVE:
             widget=self._control_plot_button, position="bottomright"
         )
 
-        image = Image(
-            (
-                "https://its-live-data.s3.amazonaws.com/documentation/"
-                "ITS_LIVE_logo_small.png"
-            ),
-            width=220,
-        )
-
-        self._control_logo = ipywidgets.Image(
-            value=image.data, format="png", width=180, height=58
-        )
-        self._control_logo_widgcntrl = ipyleaflet.WidgetControl(
-            widget=self._control_logo, position="topright"
-        )
         self._map_base_layer = ipyleaflet.basemap_to_tiles(
             {
                 "url": (
@@ -131,19 +118,24 @@ class ITSLIVE:
             center=[64.20, -49.43],
             zoom=3,
             # layout=ipywidgets.widgets.Layout(
-            #     width="100%",  # Set Width of the map, examples: "100%", "5em", "300px"
-            #     height="100%",  # Set height of the map
-            # ),
+            #     width="100%",  # Set height of the map
+            # )
         )
         self._map_picked_points_layer_group = ipyleaflet.LayerGroup(
-            layers=[], name="Picked points"
+            layers=[], name="Selected Points"
         )
 
         # Populating the map
 
         self.map.add_layer(self._map_picked_points_layer_group)
         self.map.add_layer(self._map_velocity_layer)
-        # self.map.add_layer(self._map_coverage_layer)
+        wms = ipyleaflet.WMSLayer(url="https://integration.glims.org/geoserver/GLIMS/gwc/service",
+                                  name="GLIMS glacier outlines",
+                                  layers="GLIMS:GLIMS_GLACIERS",
+                                  transparent=True,
+                                  opacity=0.33,
+                                  format='image/png')
+        self.map.add_layer(wms)
         self.map.add_control(
             ipyleaflet.MeasureControl(
                 position="topleft",
@@ -151,19 +143,26 @@ class ITSLIVE:
                 primary_length_unit="kilometers",
             )
         )
+        marker = ipyleaflet.Marker(icon=ipyleaflet.AwesomeIcon(name="check",
+                                                               marker_color='green',
+                                                               icon_color='darkgreen'))
         self.map.add_control(ipyleaflet.FullScreenControl())
         self.map.add_control(ipyleaflet.LayersControl())
+        self.map.add_control(ipyleaflet.SearchControl(
+            position="topleft",
+            url='https://nominatim.openstreetmap.org/search?format=json&q={s}',
+            zoom=5,
+            marker=marker
+            )
+        )
         self.map.add_control(ipyleaflet.ScaleControl(position="bottomleft"))
         self.map.add_control(self._control_plot_running_mean_widgcntrl)
         self.map.add_control(self._control_clear_points_button_widgcntrl)
         self.map.add_control(self._control_plot_button_widgcntrl)
-        self.map.add_control(self._control_logo_widgcntrl)
         self.map.default_style = {"cursor": "crosshair"}
         self.map.on_interaction(self._handle_map_click)
 
     def display(self, render_sidecar=True):
-
-        self.fig, self.ax = plt.subplots(1, 1, figsize=(9, 4))
         if render_sidecar:
             from sidecar import Sidecar
 
@@ -263,12 +262,12 @@ class ITSLIVE:
         sats = np.unique(sat)
         sat_plotsym_dict = {
             "1": "r+",
-            "2": "b+",
+            "2": "bo",
             "4": "y+",
             "5": "y+",
             "7": "c+",
-            "8": "g+",
-            "9": "m+",
+            "8": "g*",
+            "9": "m^",
         }
 
         sat_label_dict = {
@@ -313,6 +312,7 @@ class ITSLIVE:
                     ],
                     point_v[(sat == satellite) & (dt >= min_dt) & (dt <= max_dt)],
                     sat_plotsym_dict[satellite],
+                    markersize=3,
                     label=sat_label_dict[satellite],
                 )
 
@@ -404,7 +404,6 @@ class ITSLIVE:
         self.ax.clear()
         self.ax.set_xlabel("date")
         self.ax.set_ylabel("speed (m/yr)")
-        self.ax.set_title("ITS_LIVE Ice Flow Speed m/yr")
         self.fig.tight_layout()
         self.color_index = 0
 
@@ -412,13 +411,19 @@ class ITSLIVE:
             a.location for a in self._map_picked_points_layer_group.layers
         ]
         if len(picked_points_latlon) > 0:
+            self.ax.set_title("Plotting...")
+            self.fig.canvas.draw()
+            self._control_plot_button.disabled = True
             if self.config["verbose"]:
                 print("Plotting...")
             for lat, lon in picked_points_latlon:
                 self.plot_point_on_fig([lon, lat], "4326")
             if self.config["verbose"]:
                 print("done plotting")
+            self.ax.set_title("ITS_LIVE Ice Flow Speed m/yr")
             self.fig.canvas.draw()
+
+            self._control_plot_button.disabled = False
             # plt.show()
         else:
             print("no picked points to plot yet - pick some!")

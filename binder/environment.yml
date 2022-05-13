@@ -1,18 +1,19 @@
 name: itslive-notebooks
 channels:
   - conda-forge
-  - nodefaults
 dependencies:
   - python=3.9
+  - jupyterlab=3.3
+  - traitlets=5.0.5
   - fiona
   - ipyleaflet
   - ipympl
-  - jupyterlab=3
   - matplotlib-base
   - pandas
   - pyproj
-  - s3fs>=2021.11
+  - s3fs
   - sidecar
   - shapely
   - xarray
+  - voila
   - zarr
