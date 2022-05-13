@@ -15,5 +15,6 @@ dependencies:
   - sidecar
   - shapely
   - xarray
+  - markdown
   - voila
   - zarr
