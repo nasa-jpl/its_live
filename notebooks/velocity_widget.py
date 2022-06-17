@@ -1,5 +1,10 @@
 # for timing data access
+import os
+import shutil
 import time
+import zipfile
+from pathlib import Path
+from uuid import uuid4
 
 import ipyleaflet
 import ipywidgets
@@ -35,11 +40,16 @@ class ITSLIVE:
             "plot": "v",
             "min_separation_days": 5,
             "max_separation_days": 90,
-            "color_by": "points",
+            "color_by": "location",
             "verbose": False,
             "running_mean": True,
-            "coords": None
+            "coords": None,
+            "data_link": None,
         }
+
+        self.directory_session = uuid4()
+
+        self.ts = []
 
         self.color_index = 0
         self.icon_color_index = 0
@@ -384,6 +394,7 @@ class ITSLIVE:
             point_xy, map_epsg, variables=[variable]
         )
         if ins3xr is not None:
+            self.ts.append((ds_point, point_xy))
             ds_velocity_point = ds_point[variable]
             # dct.get_timeseries_at_point returns dataset, extract dataArray for variable from it for plotting
             # returns xarray dataset object (used for time axis in plot) and already loaded v time series
@@ -404,7 +415,35 @@ class ITSLIVE:
                     f"elapsed time: {total_time:10.2f} - {len(ds_velocity_point)/total_time:6.1f} points per second",
                     flush=True,
                 )
-        self.color_index += 1
+            self.color_index += 1
+
+    def export_data(self, *args, **kwargs):
+        dir_name = self.directory_session
+        directory = Path(f'data/{dir_name}/series')
+        directory.mkdir(parents=True, exist_ok=True)
+
+        for time_series in self.ts:
+            df = time_series[0].v.to_dataframe()
+            df = df .dropna()
+            ts = df[["v"]]
+            ts.index.rename("date", inplace=True)
+            # ts.to_csv("test-1.csv")
+            lat = round(time_series[1][1], 4)
+            lon = round(time_series[1][0], 4)
+            file_name = f"LAT{lat}--LON{lon}.csv"
+            ts.to_csv(f'data/{dir_name}/series/{file_name}')
+
+        with zipfile.ZipFile(f"data/{dir_name}/itslive-data.zip", "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for entry in directory.rglob("*"):
+                zip_file.write(entry, entry.relative_to(directory))
+
+        shutil.rmtree(f'data/{dir_name}/series')
+        if self.config["data_link"]:
+            self.config["data_link"].value = f"""
+            <a target="_blank" href="data/{dir_name}/itslive-data.zip" >
+                <div class="jupyter-button mod-warning">Download Data</div>
+            </a>
+            """
 
     def plot_time_series(self, *args, **kwargs):
 
@@ -414,6 +453,7 @@ class ITSLIVE:
         self.ax.set_ylabel("speed (m/yr)")
         self.fig.tight_layout()
         self.color_index = 0
+        self.ts = []
 
         picked_points_latlon = [
             a.location for a in self._map_picked_points_layer_group.layers
