@@ -418,14 +418,15 @@ class ITSLIVE:
             self.color_index += 1
 
     def export_data(self, *args, **kwargs):
-        dir_name = self.directory_session
+        dir_name = uuid4()
         directory = Path(f'data/{dir_name}/series')
         directory.mkdir(parents=True, exist_ok=True)
+        variable = self.config["plot"]
 
         for time_series in self.ts:
-            df = time_series[0].v.to_dataframe()
+            df = time_series[0][variable].to_dataframe()
             df = df .dropna()
-            ts = df[["v"]]
+            ts = df[[variable]]
             ts.index.rename("date", inplace=True)
             # ts.to_csv("test-1.csv")
             lat = round(time_series[1][1], 4)
