@@ -10,7 +10,7 @@ This repository provides tools for accessing and working with [ITS_LIVE](https:/
 
 ## **Web App**
 
-![ITS_LIVE Web App](https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_widget.gif)
+[![ITS_LIVE Web App](https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_widget.gif)](https://itslive-dashboard.labs.nsidc.org/)
 
 **Video tutorial**
 
