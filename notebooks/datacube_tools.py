@@ -80,19 +80,19 @@ class DATACUBETOOLS:
 
         if cubefeature:
             # find point x and y in cube native epsg if not already in that projection
-            if point_epsg_str == cubefeature["properties"]["data_epsg"].split(":")[-1]:
+            if point_epsg_str == str(cubefeature["properties"]["epsg"]):
                 point_cubexy = point_xy
             else:
                 inPROJtoTilePROJ = pyproj.Transformer.from_proj(
                     f"epsg:{point_epsg_str}",
-                    cubefeature["properties"]["data_epsg"],
+                    f"EPSG:{cubefeature['properties']['epsg']}",
                     always_xy=True,
                 )
                 point_cubexy = inPROJtoTilePROJ.transform(*point_xy)
 
             logging.info(
                 f"original xy {point_xy} {point_epsg_str} maps to datacube {point_cubexy} "
-                f" {cubefeature['properties']['data_epsg']}"
+                f"EPSG:{cubefeature['properties']['epsg']}"
             )
 
             # now test if point is in xy box for cube (should be most of the time; could fail
