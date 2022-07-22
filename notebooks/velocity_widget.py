@@ -129,7 +129,7 @@ class ITSLIVE:
             double_click_zoom=False,
             scroll_wheel_zoom=True,
             center=[57.20, -49.43],
-            zoom=3
+            zoom=4
             # layout=ipywidgets.Layout(height="100%", max_height="100%", display="flex")
         )
         self._map_picked_points_layer_group = ipyleaflet.LayerGroup(
