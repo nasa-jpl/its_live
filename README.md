@@ -4,7 +4,9 @@
 
 [![Voilà](https://img.shields.io/badge/Launch-Voilà-lightblue?atyle=plastic&logo=jupyter)](https://itslive-dashboard.labs.nsidc.org)
 
+
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/nasa-jpl/its_live/main?urlpath=lab/tree/notebooks)
+
 
 This repository provides tools for accessing and working with [ITS_LIVE](https://its-live.jpl.nasa.gov/) data.
 

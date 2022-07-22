@@ -80,19 +80,19 @@ class DATACUBETOOLS:
 
         if cubefeature:
             # find point x and y in cube native epsg if not already in that projection
-            if point_epsg_str == cubefeature["properties"]["data_epsg"].split(":")[-1]:
+            if point_epsg_str == str(cubefeature["properties"]["epsg"]):
                 point_cubexy = point_xy
             else:
                 inPROJtoTilePROJ = pyproj.Transformer.from_proj(
                     f"epsg:{point_epsg_str}",
-                    cubefeature["properties"]["data_epsg"],
+                    f"EPSG:{cubefeature['properties']['epsg']}",
                     always_xy=True,
                 )
                 point_cubexy = inPROJtoTilePROJ.transform(*point_xy)
 
             logging.info(
                 f"original xy {point_xy} {point_epsg_str} maps to datacube {point_cubexy} "
-                f" {cubefeature['properties']['data_epsg']}"
+                f"EPSG:{cubefeature['properties']['epsg']}"
             )
 
             # now test if point is in xy box for cube (should be most of the time; could fail
@@ -236,6 +236,9 @@ class DATACUBETOOLS:
             point_xy, point_epsg_str
         )
 
+        if cube_feature is None:
+            return (None, None, None)
+
         # for zarr store modify URL for use in boto open - change http: to s3: and lose s3.amazonaws.com
         incubeurl = (
             cube_feature["properties"]["zarr_url"]
@@ -265,10 +268,10 @@ class DATACUBETOOLS:
         # pull data to local machine
         pt_datset.load()
 
-        print(
-            f"time series loaded {[f'{x}: {pt_datset[x].shape[0]}' for x in variables]} points - elapsed time: {(time.time()-start):10.2f}",
-            flush=True,
-        )
+        # print(
+        #     f"time series loaded {[f'{x}: {pt_datset[x].shape[0]}' for x in variables]} points - elapsed time: {(time.time()-start):10.2f}",
+        #     flush=True,
+        # )
         # end for zarr store
 
         return (ins3xr, pt_datset, point_cubexy)
