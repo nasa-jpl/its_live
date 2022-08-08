@@ -1,5 +1,4 @@
 # for timing data access
-import os
 import shutil
 import time
 import zipfile
@@ -12,7 +11,7 @@ import numpy as np
 import pandas as pd
 # to get and use geojson datacube catalog
 # for datacube xarray/zarr access
-from IPython.display import Image, display
+from IPython.display import display
 # for plotting time series
 from matplotlib import pyplot as plt
 
@@ -61,7 +60,7 @@ class ITSLIVE:
     def set_config(self, config):
         self.config = config
 
-    def _initialize_widgets(self, projection='global'):
+    def _initialize_widgets(self, projection="global"):
         self._control_plot_running_mean_checkbox = ipywidgets.Checkbox(
             value=True,
             description="Include running mean",
@@ -85,7 +84,7 @@ class ITSLIVE:
         self._control_plot_button = ipywidgets.Button(
             description="Draw Marker", tooltip="click to make plot"
         )
-        self._control_plot_button.style.button_color = 'lightgreen'
+        self._control_plot_button.style.button_color = "lightgreen"
         self._control_plot_button.on_click(self.plot_time_series)
         self._control_plot_button_widgcntrl = ipyleaflet.WidgetControl(
             widget=self._control_plot_button, position="bottomleft"
@@ -154,16 +153,19 @@ class ITSLIVE:
                 primary_length_unit="kilometers",
             )
         )
-        marker = ipyleaflet.Marker(icon=ipyleaflet.AwesomeIcon(name="check",
-                                                               marker_color='green',
-                                                               icon_color='darkgreen'))
+        marker = ipyleaflet.Marker(
+            icon=ipyleaflet.AwesomeIcon(
+                name="check", marker_color="green", icon_color="darkgreen"
+            )
+        )
         self.map.add_control(ipyleaflet.FullScreenControl())
         self.map.add_control(ipyleaflet.LayersControl())
-        self.map.add_control(ipyleaflet.SearchControl(
-            position="topleft",
-            url='https://nominatim.openstreetmap.org/search?format=json&q={s}',
-            zoom=5,
-            marker=marker
+        self.map.add_control(
+            ipyleaflet.SearchControl(
+                position="topleft",
+                url="https://nominatim.openstreetmap.org/search?format=json&q={s}",
+                zoom=5,
+                marker=marker,
             )
         )
         self.map.add_control(ipyleaflet.ScaleControl(position="bottomleft"))
@@ -241,9 +243,7 @@ class ITSLIVE:
         icon = ipyleaflet.DivIcon(
             html=html_for_marker, icon_anchor=[0, 0], icon_size=[0, 0]
         )
-        new_point = ipyleaflet.Marker(
-            location=coordinates, icon=icon
-        )
+        new_point = ipyleaflet.Marker(location=coordinates, icon=icon)
 
         # added points are tracked (color/symbol assigned) by the order they are added to the layer_group
         # (each point/icon is a layer by itself in ipyleaflet)
@@ -394,10 +394,18 @@ class ITSLIVE:
             point_xy, map_epsg, variables=[variable]
         )
         if ins3xr is not None:
-            export = ins3xr[['v','v_error','vx','vy','date_dt','satellite_img1']].sel(
-                x=point_tilexy[0], y=point_tilexy[1], method="nearest"
-            )
- 
+            export = ins3xr[
+                [
+                    "v",
+                    "v_error",
+                    "vx",
+                    "vy",
+                    "date_dt",
+                    "satellite_img1",
+                    "mission_img1",
+                ]
+            ].sel(x=point_tilexy[0], y=point_tilexy[1], method="nearest")
+
             self.ts.append((export, point_xy))
             ds_velocity_point = ds_point[variable]
             # dct.get_timeseries_at_point returns dataset, extract dataArray for variable from it for plotting
@@ -423,27 +431,38 @@ class ITSLIVE:
 
     def export_data(self, *args, **kwargs):
         dir_name = uuid4()
-        directory = Path(f'data/{dir_name}/series')
+        directory = Path(f"data/{dir_name}/series")
         directory.mkdir(parents=True, exist_ok=True)
-        variable = self.config["plot"]
 
         for time_series in self.ts:
-            time_series[0].load()
+            # time_series[0].load()
             df = time_series[0].to_dataframe()
-            df = df.rename(columns={"x": "lon", "y": "lat", "satellite_img1": "satellite"})
+            df = df.rename(
+                columns={
+                    "x": "lon",
+                    "y": "lat",
+                    "satellite_img1": "satellite",
+                    "mission_img1": "mission",
+                }
+            )
             ts = df.dropna()
+            ts["date_dt"] = ts["date_dt"].dt.days
             lat = round(time_series[1][1], 4)
             lon = round(time_series[1][0], 4)
             file_name = f"LAT{lat}--LON{lon}.csv"
-            ts.to_csv(f'data/{dir_name}/series/{file_name}')
+            ts.to_csv(f"data/{dir_name}/series/{file_name}")
 
-        with zipfile.ZipFile(f"data/{dir_name}/itslive-data.zip", "w", zipfile.ZIP_DEFLATED) as zip_file:
+        with zipfile.ZipFile(
+            f"data/{dir_name}/itslive-data.zip", "w", zipfile.ZIP_DEFLATED
+        ) as zip_file:
             for entry in directory.rglob("*"):
                 zip_file.write(entry, entry.relative_to(directory))
 
-        shutil.rmtree(f'data/{dir_name}/series')
+        shutil.rmtree(f"data/{dir_name}/series")
         if self.config["data_link"]:
-            self.config["data_link"].value = f"""
+            self.config[
+                "data_link"
+            ].value = f"""
             <a target="_blank" href="data/{dir_name}/itslive-data.zip" >
                 <div class="jupyter-button mod-warning">Download Data</div>
             </a>
