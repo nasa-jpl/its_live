@@ -436,7 +436,11 @@ class ITSLIVE:
 
         for time_series in self.ts:
             # time_series[0].load()
+            lat = round(time_series[1][1], 4)
+            lon = round(time_series[1][0], 4)
             df = time_series[0].to_dataframe()
+            df["x"] = lon
+            df["y"] = lat
             df = df.rename(
                 columns={
                     "x": "lon",
@@ -447,8 +451,6 @@ class ITSLIVE:
             )
             ts = df.dropna()
             ts["date_dt"] = ts["date_dt"].dt.days
-            lat = round(time_series[1][1], 4)
-            lon = round(time_series[1][0], 4)
             file_name = f"LAT{lat}--LON{lon}.csv"
             ts.to_csv(f"data/{dir_name}/series/{file_name}")
 
