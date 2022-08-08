@@ -394,7 +394,11 @@ class ITSLIVE:
             point_xy, map_epsg, variables=[variable]
         )
         if ins3xr is not None:
-            self.ts.append((ds_point, point_xy))
+            export = ins3xr[['v','v_error','vx','vy','date_dt','satellite_img1']].sel(
+                x=point_tilexy[0], y=point_tilexy[1], method="nearest"
+            )
+ 
+            self.ts.append((export, point_xy))
             ds_velocity_point = ds_point[variable]
             # dct.get_timeseries_at_point returns dataset, extract dataArray for variable from it for plotting
             # returns xarray dataset object (used for time axis in plot) and already loaded v time series
@@ -424,11 +428,10 @@ class ITSLIVE:
         variable = self.config["plot"]
 
         for time_series in self.ts:
-            df = time_series[0][variable].to_dataframe()
-            df = df .dropna()
-            ts = df[[variable]]
-            ts.index.rename("date", inplace=True)
-            # ts.to_csv("test-1.csv")
+            time_series[0].load()
+            df = time_series[0].to_dataframe()
+            df = df.rename(columns={"x": "lon", "y": "lat", "satellite_img1": "satellite"})
+            ts = df.dropna()
             lat = round(time_series[1][1], 4)
             lon = round(time_series[1][0], 4)
             file_name = f"LAT{lat}--LON{lon}.csv"

@@ -90,7 +90,7 @@ class DATACUBETOOLS:
                 )
                 point_cubexy = inPROJtoTilePROJ.transform(*point_xy)
 
-            logging.info(
+            print(
                 f"original xy {point_xy} {point_epsg_str} maps to datacube {point_cubexy} "
                 f"EPSG:{cubefeature['properties']['epsg']}"
             )
