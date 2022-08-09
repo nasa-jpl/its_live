@@ -399,7 +399,9 @@ class ITSLIVE:
                     "v",
                     "v_error",
                     "vx",
+                    "vx_error",
                     "vy",
+                    "vy_error",
                     "date_dt",
                     "satellite_img1",
                     "mission_img1",
@@ -450,9 +452,26 @@ class ITSLIVE:
                 }
             )
             ts = df.dropna()
+            ts["epsg"] = time_series[0].attrs["projection"]
             ts["date_dt"] = ts["date_dt"].dt.days
             file_name = f"LAT{lat}--LON{lon}.csv"
-            ts.to_csv(f"data/{dir_name}/series/{file_name}")
+            ts.to_csv(
+                f"data/{dir_name}/series/{file_name}",
+                columns=[
+                    "lat",
+                    "lon",
+                    "v",
+                    "v_error",
+                    "vx",
+                    "vx_error",
+                    "vy",
+                    "vy_error",
+                    "date_dt",
+                    "mission",
+                    "satellite",
+                    "epsg",
+                ],
+            )
 
         with zipfile.ZipFile(
             f"data/{dir_name}/itslive-data.zip", "w", zipfile.ZIP_DEFLATED
