@@ -449,24 +449,30 @@ class ITSLIVE:
                     "y": "lat",
                     "satellite_img1": "satellite",
                     "mission_img1": "mission",
+                    "v": "v [m/yr]",
+                    "v_error": "v_error [m/yr]",
+                    "vx": "vx [m/yr]",
+                    "vx_error": "vx_error [m/yr]",
+                    "vy": "vy [m/yr]",
+                    "vy_error": "vy_error [m/yr]",
                 }
             )
             ts = df.dropna()
             ts["epsg"] = time_series[0].attrs["projection"]
-            ts["date_dt"] = ts["date_dt"].dt.days
+            ts["date_dt [days]"] = ts["date_dt"].dt.days
             file_name = f"LAT{lat}--LON{lon}.csv"
             ts.to_csv(
                 f"data/{dir_name}/series/{file_name}",
                 columns=[
                     "lat",
                     "lon",
-                    "v",
-                    "v_error",
-                    "vx",
-                    "vx_error",
-                    "vy",
-                    "vy_error",
-                    "date_dt",
+                    "v [m/yr]",
+                    "v_error [m/yr]",
+                    "vx [m/yr]",
+                    "vx_error [m/yr]",
+                    "vy [m/yr]",
+                    "vy_error [m/yr]",
+                    "date_dt [days]",
                     "mission",
                     "satellite",
                     "epsg",
