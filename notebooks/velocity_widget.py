@@ -224,8 +224,18 @@ class ITSLIVE:
 
         tsmean = pd.to_datetime(tsmean).values
         return (runmean, tsmean)
+    
+    def import_points(self, content):
+        df = pd.read_csv(content)
+        last_points = None
+        for row in df.itertuples(index=False):
+            try:
+                self.add_point((row.lon,row.lat))
+                last_points = (row.lon, row.lat)
+            except Exception:
+                print(Exception)
 
-    def add_point(self, coordinates):
+    def add_point(self, point):
         color = plt.cm.tab10(self.icon_color_index)
         if self.config["verbose"]:
             print(self.icon_color_index, color)
@@ -243,14 +253,14 @@ class ITSLIVE:
         icon = ipyleaflet.DivIcon(
             html=html_for_marker, icon_anchor=[0, 0], icon_size=[0, 0]
         )
-        new_point = ipyleaflet.Marker(location=coordinates, icon=icon)
+        new_point = ipyleaflet.Marker(location=point, icon=icon)
 
         # added points are tracked (color/symbol assigned) by the order they are added to the layer_group
         # (each point/icon is a layer by itself in ipyleaflet)
         self._map_picked_points_layer_group.add_layer(new_point)
 
         if self.config["verbose"]:
-            print(f"point added {coordinates}")
+            print(f"point added {point}")
         self.icon_color_index += 1
 
     def _handle_map_click(self, **kwargs):
