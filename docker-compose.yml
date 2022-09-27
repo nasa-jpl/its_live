@@ -1,0 +1,85 @@
+version: '3.6'
+
+services:
+
+  voila:
+    build: ./voila
+    command: >
+      /env/bin/voila --MappingKernelManager.cull_interval=60 --MappingKernelManager.cull_idle_timeout=120 --no-browser --VoilaConfiguration.file_whitelist="['.*.(nc|png|csv|zip)']" --preheat_kernel=True --pool_size=6 --port=8000 -Voila.ip="0.0.0.0" /env/notebooks/itslive-widget.ipynb
+    networks:
+      - internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=internal"
+      - "traefik.http.routers.voila.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.voila.entrypoints=https"
+      - "traefik.http.routers.voila.tls=true"
+      - "traefik.http.services.voila.loadbalancer.server.port=8000"
+    volumes:
+      - type: bind
+        source: /opt/voila/downloads
+        target: /env/notebooks/data
+        bind:
+          create_host_path: true
+
+  traefik:
+    image: traefik:v2.6.0
+    command:
+      - --global.sendanonymoususage=false
+      - --entryPoints.http.address=:80
+      - --entryPoints.https.address=:443
+      - --api=true
+      - --api.dashboard=true
+      - --api.debug=true
+      - --providers.docker=true
+      - --providers.docker.endpoint=unix:///var/run/docker.sock
+      - --providers.docker.watch
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+      - --log.filePath=/logs/traefik.log
+      - --log.format=json
+      - --log.level=DEBUG
+      - --accesslog=true
+      - --accesslog.filepath=/logs/access.log
+      - --accesslog.bufferingsize=500
+      - --accesslog.format=json
+      - --accesslog.fields.headers.defaultmode=keep
+      - --entryPoints.https.forwardedHeaders.insecure
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.dashboard.rule=Host(`${STACK_INTERNAL_DNS}`) && PathPrefix(`/traefik/`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.middlewares=traefik-auth"
+      - "traefik.http.routers.dashboard.entrypoints=https"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.middlewares.traefik-auth.basicauth.users=`${AUTH_TRAEFIK}`"
+      - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=http"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+    networks:
+      - internal
+      - proxy
+    ports:
+      - published: 80
+        target: 80
+      - published: 443
+        target: 443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+      - type: bind
+        source: /opt/voila/logs/
+        target: /logs
+        bind:
+          create_host_path: true
+
+
+networks:
+  proxy:
+    external: true
+  internal:
+    external: true
