@@ -226,14 +226,17 @@ class ITSLIVE:
         return (runmean, tsmean)
     
     def import_points(self, content):
-        df = pd.read_csv(content)
+        df = pd.read_csv(content, usecols=[0,1], names=['lat', 'lon'], header=None)
         last_points = None
         for row in df.itertuples(index=False):
             try:
-                self.add_point((row.lon,row.lat))
-                last_points = (row.lon, row.lat)
+                if getattr(row, "lat") and getattr(row, "lon"):
+                    self.add_point((row.lat,row.lon))
+                    last_points = (row.lat, row.lon)
             except Exception:
                 print(Exception)
+        self.map.fit_bounds([[last_points[0]-5, last_points[1]-5], [last_points[0]+5,last_points[1]+5]])
+        self.map.zoom = 6
 
     def add_point(self, point):
         color = plt.cm.tab10(self.icon_color_index)
