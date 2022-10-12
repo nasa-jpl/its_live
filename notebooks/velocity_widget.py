@@ -121,6 +121,15 @@ class ITSLIVE:
                 "name": "Coastlines",
             }
         )
+        self._map_landmask_layer = ipyleaflet.basemap_to_tiles(
+            {
+                "url": "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/OSM_Land_Mask/default/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png",
+                "attribution": "NASA GIBS Imagery",
+                "name": "Land Mask",
+            }
+        )
+
+        # OSM_Land_Mask
         # self._map_coastlines_layer.base = True
         self._map_coverage_layer = ipyleaflet.GeoJSON(
             data=self.dct.json_catalog,
@@ -151,11 +160,13 @@ class ITSLIVE:
             layers=[], name="Selected Points"
         )
 
+        self._map_landmask_layer.opacity = 0.5
         # Populating the map
 
         self.map.add_layer(self._map_picked_points_layer_group)
         self.map.add_layer(self._map_velocity_layer)
         self.map.add_layer(self._map_coastlines_layer)
+        self.map.add_layer(self._map_landmask_layer)
         self.map.add_layer(self._map_base_layer)
         # wms = ipyleaflet.WMSLayer(url="https://integration.glims.org/geoserver/GLIMS/gwc/service",
         #                           name="GLIMS glacier outlines",
