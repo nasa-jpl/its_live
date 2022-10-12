@@ -1,4 +1,5 @@
 # for timing data access
+import io
 import shutil
 import time
 import zipfile
@@ -7,11 +8,13 @@ from uuid import uuid4
 
 import ipyleaflet
 import ipywidgets
+import markdown
 import numpy as np
 import pandas as pd
 # to get and use geojson datacube catalog
 # for datacube xarray/zarr access
 from IPython.display import display
+from ipywidgets import HTML, FileUpload, widgets
 # for plotting time series
 from matplotlib import pyplot as plt
 
@@ -35,16 +38,6 @@ class ITSLIVE:
         self.dct = (
             dctools()
         )  # initializes geojson catalog and open cubes list for this object
-        self.config = {
-            "plot": "v",
-            "min_separation_days": 5,
-            "max_separation_days": 90,
-            "color_by": "location",
-            "verbose": False,
-            "running_mean": True,
-            "coords": None,
-            "data_link": None,
-        }
 
         self.directory_session = uuid4()
 
@@ -53,9 +46,23 @@ class ITSLIVE:
         self.color_index = 0
         self.icon_color_index = 0
         self._last_click = None
-        self.fig, self.ax = plt.subplots(1, 1)
+        self.fig, self.fig_h = plt.figure(1), plt.figure(2)
+        self.ax, self.ax_h = self.fig.add_subplot(111), self.fig_h.add_subplot(111)
 
         self._initialize_widgets()
+
+        self.config = {
+            "plot": "v",
+            "min_separation_days": 5,
+            "max_separation_days": 90,
+            "color_by": "location",
+            "verbose": False,
+            "running_mean": False,
+            "coords": {"latitude": self._latitude, "longitude": self._longitude},
+            "data_link": self._data_link,
+            "title": None,
+            "instructions": None,
+        }
 
     def set_config(self, config):
         self.config = config
@@ -107,6 +114,14 @@ class ITSLIVE:
                 "name": "ITS_LIVE Velocity Mosaic",
             }
         )
+        self._map_coastlines_layer = ipyleaflet.basemap_to_tiles(
+            {
+                "url": "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Coastlines_15m/default/GoogleMapsCompatible_Level13/{z}/{y}/{x}.png",
+                "attribution": "NASA GIBS Imagery",
+                "name": "Coastlines",
+            }
+        )
+        # self._map_coastlines_layer.base = True
         self._map_coverage_layer = ipyleaflet.GeoJSON(
             data=self.dct.json_catalog,
             name="ITS_LIVE datacube coverage",
@@ -124,13 +139,14 @@ class ITSLIVE:
             },
         )
         self.map = ipyleaflet.Map(
-            basemap=self._map_base_layer,
             double_click_zoom=False,
             scroll_wheel_zoom=True,
             center=[57.20, -49.43],
             zoom=4
             # layout=ipywidgets.Layout(height="100%", max_height="100%", display="flex")
         )
+        self._map_velocity_layer.base = True
+        self._map_base_layer.base = True
         self._map_picked_points_layer_group = ipyleaflet.LayerGroup(
             layers=[], name="Selected Points"
         )
@@ -139,6 +155,8 @@ class ITSLIVE:
 
         self.map.add_layer(self._map_picked_points_layer_group)
         self.map.add_layer(self._map_velocity_layer)
+        self.map.add_layer(self._map_coastlines_layer)
+        self.map.add_layer(self._map_base_layer)
         # wms = ipyleaflet.WMSLayer(url="https://integration.glims.org/geoserver/GLIMS/gwc/service",
         #                           name="GLIMS glacier outlines",
         #                           layers="GLIMS:GLIMS_GLACIERS",
@@ -174,6 +192,291 @@ class ITSLIVE:
         # self.map.add_control(self._control_plot_button_widgcntrl)
         self.map.default_style = {"cursor": "crosshair"}
         self.map.on_interaction(self._handle_map_click)
+        self.map.world_copy_jump = True
+
+        self._dates_range = widgets.SelectionRangeSlider(
+            options=[i for i in range(546)],
+            index=(1, 120),
+            continuous_update=False,
+            description="Interval (days): ",
+            orientation="horizontal",
+            layout={"width": "90%", "display": "flex"},
+            style={"description_width": "initial"},
+        )
+
+        self._variables = widgets.Dropdown(
+            options=["v", "v_error", "vx", "vy"],
+            description="Variable: ",
+            disabled=False,
+            value="v",
+            layout={"width": "20%", "display": "flex"},
+            style={"description_width": "initial"},
+        )
+
+        self._plot_type = widgets.Dropdown(
+            options=["location", "satellite"],
+            description="Plot By: ",
+            disabled=False,
+            value="location",
+            layout={"width": "20%", "display": "flex"},
+            style={"description_width": "initial"},
+        )
+
+        self._plot_button = widgets.Button(
+            description="Plot",
+            button_style="primary",
+            icon="line-chart",
+            style={"description_width": "initial"},
+        )
+
+        self._clear_button = widgets.Button(
+            description="Clear Points",
+            # button_style='warning',
+            icon="trash",
+            style={"description_width": "initial"},
+        )
+
+        self._latitude = widgets.BoundedFloatText(
+            value=0.0,
+            min=-90.0,
+            max=90.0,
+            step=0.1,
+            description="Lat: ",
+            disabled=False,
+            style={"description_width": "initial"},
+            layout={"width": "20%", "display": "flex"},
+        )
+
+        self._longitude = widgets.BoundedFloatText(
+            value=0.0,
+            min=-180.0,
+            max=180.0,
+            step=0.1,
+            description="Lon: ",
+            disabled=False,
+            style={"description_width": "initial"},
+            layout={"width": "20%", "display": "flex"},
+        )
+
+        self._f_upload = FileUpload(
+            accept="*.csv",
+            description="Import coords",
+            multiple=False,  # True to accept multiple files upload else False
+        )
+
+        self._add_button = widgets.Button(
+            description="Add Point",
+            # button_style='info',
+            icon="map-marker",
+            style={"description_width": "initial"},
+        )
+
+        self._include_running_mean = widgets.Checkbox(
+            value=False,
+            description="Include Running Mean",
+            style={"description_width": "initial"},
+            disabled=False,
+            indent=False,
+            tooltip="Plot running mean through each time series",
+            layout=widgets.Layout(width="25%"),
+        )
+
+        self._export_button = widgets.Button(
+            description="Export Data",
+            # button_style='info',
+            icon="file-export",
+            style={"description_width": "initial"},
+        )
+
+        self._data_link = widgets.HTML(value="<br>")
+
+        self._plot_button.on_click(self.plot_time_series)
+        self._clear_button.on_click(self.clear_points)
+
+        def update_variable(change):
+            if change["type"] == "change" and change["name"] == "value":
+                self.config["plot"] = self._variables.value
+                self.set_config(self.config)
+                self.plot_time_series()
+
+        def update_range(change):
+            if change["type"] == "change" and change["name"] == "value":
+                start, end = change["new"]
+                self.config["min_separation_days"] = start
+                self.config["max_separation_days"] = end
+                self.set_config(self.config)
+                self.plot_time_series()
+
+        def update_plottype(change):
+            if change["type"] == "change" and change["name"] == "value":
+                self.config["color_by"] = self._plot_type.value
+                self.set_config(self.config)
+                self.plot_time_series()
+
+        def update_mean(change):
+            if change["type"] == "change" and change["name"] == "value":
+                self.config["running_mean"] = self._include_running_mean.value
+                self.set_config(self.config)
+                self.plot_time_series()
+
+        def add_point(event):
+            if type(event) != widgets.Button:
+                uploaded = self._f_upload.value
+                file_name = list(uploaded.keys())[0]
+                coords = self.import_points(
+                    io.StringIO(uploaded[file_name]["content"].decode("utf-8"))
+                )
+            else:
+                coords = (self._latitude.value, self._longitude.value)
+                self.add_point(coords)
+
+        def export_ts(event):
+            self.export_data()
+
+        self._export_button.on_click(export_ts)
+
+        self._add_button.on_click(add_point)
+        self._dates_range.observe(update_range, "value")
+        self._plot_type.observe(update_plottype, "value")
+        self._variables.observe(update_variable, "value")
+        self._include_running_mean.observe(update_mean, "value")
+
+        self._f_upload.observe(add_point, names="value")
+
+        layout = widgets.Layout(
+            align_items="stretch",
+            display="flex",
+            flex_flow="row wrap",
+            border="none",
+            grid_template_columns="repeat(auto-fit, minmax(720px, 1fr))",
+            # grid_template_columns='48% 48%',
+            width="99%",
+            height="100%",
+        )
+
+        self._plot_tab = widgets.Tab()
+        self._plot_tab.children = [self.fig.canvas, self.fig_h.canvas]
+        [
+            self._plot_tab.set_title(i, title)
+            for i, title in enumerate(["Velocity", "Elevation Change"])
+        ]
+
+        if hasattr(self, "config"):
+            self._title = self.config["title"]
+            self._instructions = self.config["instructions"]
+        else:
+            html_title = markdown.markdown(
+                """
+<div>
+    <h2><center><a href="https://its-live.jpl.nasa.gov/"><img align="middle" src="https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_logo.png" height="50"/></a></center></h2>
+    <h3><center>Global Glacier Velocity Point Data Access</center></h3>
+</div>
+
+***
+
+"""
+            )
+            html_instructions = markdown.markdown(
+                """Click and drag on the map to pan the field of view. Select locations by double-clicking on the map then press Plot. Once plotted you can change the Variable that is being shown and how the markers are colored using Plot By. You can drag individual points after they are placed to relocate them, and then Plot again or Clear markers to start over.
+You can also single-click on the map to populate the Lat and Lon boxes then add a point using the Add Point. Lat and Lon can also be edited manually.
+Hovering your cursor over the plot reveals tools to zoom, pan, and save the figure.
+
+Importing coordinates: We can use a CSV file with lat, lon values and the tool will place them in the map ready to be plotted, the file should be in the following format:
+
+<br>
+<b>lat,lon</b><br>
+70.3456,-45.0856<br>
+71.0763,-45.0235<br>
+<br>
+
+In order to have a clear plot no more than 20 points is adviced.
+
+Press Export Data to generate comma separated value (.csv) files of the data. Press Download Data to retrieve locally. Export Data must be pressed each time new data is requested.
+Check out the video tutorial if you're a visual learner:
+
+<center><a href="https://www.youtube.com/watch?v=VYKsVvpVbmU" target="_blank"><img width="50%" src="https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_widget_youtube.jpg"></a></center>
+
+Data are Version 2 of the ITS_LIVE global glacier velocity dataset that provides up-to-date velocities from Sentinel-1, Sentinel-2, Landsat-8 and Landsat-9 data. Version 2 annual mosaics are coming soon, and will be followed by Landsat 7 and improved Landsat 9 velocities.
+Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for known issues, citation and other product information."""
+            )
+        self._title = HTML(
+            html_title,
+            layout=widgets.Layout(width="100%", display="flex", align_items="stretch"),
+        )
+        self._instructions = widgets.Accordion(
+            children=[HTML(html_instructions)], selected_index=None
+        )
+        self._instructions.set_title(0, title="Instructions")
+
+        self.ui = widgets.GridBox(
+            [
+                widgets.VBox(
+                    [
+                        widgets.VBox(
+                            [self._title, self._instructions],
+                            layout=widgets.Layout(width="100%"),
+                        ),
+                        widgets.VBox(
+                            [
+                                self.map,
+                                widgets.HBox(
+                                    [
+                                        self._latitude,
+                                        self._longitude,
+                                        self._add_button,
+                                        self._clear_button,
+                                        self._f_upload,
+                                    ],
+                                    layout=widgets.Layout(
+                                        align_items="flex-start", flex_flow="row wrap"
+                                    ),
+                                ),
+                                self._dates_range,
+                                widgets.HBox(
+                                    [
+                                        self._plot_button,
+                                        self._variables,
+                                        self._plot_type,
+                                        self._include_running_mean,
+                                    ],
+                                    layout=widgets.Layout(
+                                        justify_content="flex-start",
+                                        flex_flow="row wrap",
+                                    ),
+                                ),
+                            ],
+                            layout=widgets.Layout(
+                                min_width="420px",
+                                # display="flex",
+                                # height="100%",
+                                # max_height="100%",
+                                max_width="100%",
+                            ),
+                        ),
+                    ],
+                    layout=widgets.Layout(
+                        min_width="100%",
+                        display="flex",
+                        # height="100%",
+                        # max_height="100%",
+                        max_width="100%",
+                    ),
+                ),
+                widgets.VBox(
+                    [
+                        self._plot_tab,
+                        widgets.HBox([self._export_button, self._data_link]),
+                    ],
+                    layout=widgets.Layout(
+                        min_width="420px",
+                        overflow="scroll",
+                        max_width="100%",
+                        display="flex",
+                    ),
+                ),
+            ],
+            layout=layout,
+        )
 
     def display(self, render_sidecar=True):
         if render_sidecar:
@@ -224,18 +527,23 @@ class ITSLIVE:
 
         tsmean = pd.to_datetime(tsmean).values
         return (runmean, tsmean)
-    
+
     def import_points(self, content):
-        df = pd.read_csv(content, usecols=[0,1], names=['lat', 'lon'], header=None)
+        df = pd.read_csv(content, usecols=[0, 1], names=["lat", "lon"], header=None)
         last_points = None
         for row in df.itertuples(index=False):
             try:
                 if getattr(row, "lat") and getattr(row, "lon"):
-                    self.add_point((row.lat,row.lon))
+                    self.add_point((row.lat, row.lon))
                     last_points = (row.lat, row.lon)
             except Exception:
                 print(Exception)
-        self.map.fit_bounds([[last_points[0]-5, last_points[1]-5], [last_points[0]+5,last_points[1]+5]])
+        self.map.fit_bounds(
+            [
+                [last_points[0] - 5, last_points[1] - 5],
+                [last_points[0] + 5, last_points[1] + 5],
+            ]
+        )
         self.map.zoom = 6
 
     def add_point(self, point):
@@ -348,7 +656,7 @@ class ITSLIVE:
                 )
 
     def _plot_by_points(self, ins3xr, point_v, point_xy, map_epsg):
-        point_label = f"Lat: {round(point_xy[1], 2)}, Lon: {round(point_xy[0], 2)}"
+        point_label = f"Lat: {round(point_xy[1], 4)}, Lon: {round(point_xy[0], 4)}"
         if self.config["verbose"]:
             print(point_xy)
 
@@ -389,6 +697,23 @@ class ITSLIVE:
             label=point_label,
         )
 
+    def plot_elevation(self, h, coords):
+        point_label = f"Lat: {round(coords[1], 4)}, Lon: {round(coords[0], 4)}"
+        alpha_value = 0.75
+        marker_size = 3
+        self.ax_h.plot(
+            h,
+            linestyle="None",
+            markeredgecolor=plt.cm.tab10(self.color_index),
+            markerfacecolor=plt.cm.tab10(self.color_index),
+            marker="o",
+            alpha=alpha_value,
+            markersize=marker_size,
+            label=point_label,
+        )
+        self.ax_h.set_xlabel("time")
+        self.ax_h.set_ylabel("elevation change (meters)")
+
     def plot_point_on_fig(self, point_xy, map_epsg):
 
         # pointxy is [x,y] coordinate in mapfig projection (map_epsg below), nax is plot axis for time series plot
@@ -426,17 +751,35 @@ class ITSLIVE:
             # dct.get_timeseries_at_point returns dataset, extract dataArray for variable from it for plotting
             # returns xarray dataset object (used for time axis in plot) and already loaded v time series
 
+            def legend_without_duplicate_labels(ax):
+                handles, labels = ax.get_legend_handles_labels()
+                unique = [
+                    (h, l)
+                    for i, (h, l) in enumerate(zip(handles, labels))
+                    if l not in labels[:i]
+                ]
+                ax.legend(*zip(*unique), loc="upper right", fontsize=9)
+
+            if point_xy[1] < -60:
+                ts = self.dct.load_elevation_timeseries(point_xy[0], point_xy[1])
+                if ts is not None:
+                    self.plot_elevation(ts, point_xy)
+                    if self.ax_h.get_legend() is not None:
+                        self.ax_h.get_legend().remove()
+                    legend_without_duplicate_labels(self.ax_h)
+
             if self.config["color_by"] == "satellite":
                 self._plot_by_satellite(ins3xr, ds_velocity_point, point_xy, map_epsg)
             else:
                 self._plot_by_points(ins3xr, ds_velocity_point, point_xy, map_epsg)
-            plt.tight_layout()
-            handles, labels = plt.gca().get_legend_handles_labels()
-            by_label = dict(zip(labels, handles))
-            plt.legend(
-                by_label.values(), by_label.keys(), loc="upper left", fontsize=10
-            )
+
+            if self.ax.get_legend() is not None:
+                self.ax.get_legend().remove()
+
+            legend_without_duplicate_labels(self.ax)
+
             total_time = time.time() - start
+
             if self.config["verbose"]:
                 print(
                     f"elapsed time: {total_time:10.2f} - {len(ds_velocity_point)/total_time:6.1f} points per second",
@@ -512,9 +855,12 @@ class ITSLIVE:
 
         # reset plot and color index
         self.ax.clear()
+        self.ax_h.clear()
+
         self.ax.set_xlabel("date")
         self.ax.set_ylabel("speed (m/yr)")
         self.fig.tight_layout()
+        self.fig_h.tight_layout()
         self.color_index = 0
         self.ts = []
 
@@ -533,7 +879,12 @@ class ITSLIVE:
                 print("done plotting")
             plt.get_current_fig_manager().canvas.set_window_title("")
             self.ax.set_title("ITS_LIVE Ice Flow Speed m/yr")
+            self.ax_h.set_title("ITS_LIVE Elevation Change (m)")
+
+            self.fig.tight_layout()
             self.fig.canvas.draw()
+            self.fig_h.tight_layout()
+            self.fig_h.canvas.draw()
 
             self._control_plot_button.disabled = False
             # plt.show()

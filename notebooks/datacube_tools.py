@@ -9,6 +9,7 @@ import pyproj
 import s3fs as s3
 # for datacube xarray/zarr access
 import xarray as xr
+from pyproj import Transformer
 # for plotting time series
 from shapely import geometry
 
@@ -40,6 +41,14 @@ class DATACUBETOOLS:
             "all": "s3://its-live-data/datacubes/catalog_v02.json",
         }
 
+        self.transformer_3031 = Transformer.from_crs(4326, 3031, always_xy=True)
+
+        self.elevation_dataset = xr.open_dataset(
+            "s3://its-live-data/elevation/v01/ANT_G1920V01_GroundedIceHeight.zarr",
+            engine="zarr",
+            storage_options={"anon": True},
+        )
+
         # S3fs used to access cubes in python
         self._s3fs = s3.S3FileSystem(anon=True)
         # keep track of open cubes so that we don't re-read xarray metadata and dimension vectors
@@ -48,6 +57,17 @@ class DATACUBETOOLS:
         with self._s3fs.open(self.catalog[use_catalog], "r") as incubejson:
             self._json_all = json.load(incubejson)
         self.json_catalog = self._json_all
+
+    def load_elevation_timeseries(self, lon, lat):
+
+        x_projected, y_projected = self.transformer_3031.transform(lon, lat)
+        ts = (
+            self.elevation_dataset["dh"]
+            .sel(x=x_projected, y=y_projected, method="nearest")
+            .to_dataframe()
+            .dropna()
+        )
+        return ts["dh"]
 
     def find_datacube_catalog_entry_for_point(self, point_xy, point_epsg_str):
         """
@@ -147,6 +167,16 @@ class DATACUBETOOLS:
                         newpoint_cubexy[0] -= 1.0
 
                 # now reproject this point to lat lon and look for new feature
+                if "data_epsg" in cubefeature["properties"]:
+                    epsg_source = cubefeature["properties"]["data_epsg"]
+                elif "projection" in cubefeaturea["properties"]:
+                    epsg_source = cubefeature["properties"]["projection"]
+                else:
+                    epsg_source = None
+
+                if epsg_source is None:
+                    print("Source projection not found")
+                    return None
 
                 cubePROJtoLL = pyproj.Transformer.from_proj(
                     f'{cubefeature["properties"]["data_epsg"]}',
