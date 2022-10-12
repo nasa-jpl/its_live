@@ -353,9 +353,28 @@ class ITSLIVE:
             width="99%",
             height="100%",
         )
-
+        self._velocity_controls = widgets.HBox(
+            [
+                self._variables,
+                self._plot_type,
+                self._include_running_mean,
+            ],
+            layout=widgets.Layout(
+                justify_content="flex-start",
+                flex_flow="row wrap",
+            ),
+        )
         self._plot_tab = widgets.Tab()
-        self._plot_tab.children = [self.fig.canvas, self.fig_h.canvas]
+        self._plot_tab.children = [
+            widgets.VBox(
+                [self._dates_range, self._velocity_controls, self.fig.canvas],
+                layout=widgets.Layout(
+                    min_width="420px",
+                    max_width="100%",
+                ),
+            ),
+            self.fig_h.canvas,
+        ]
         [
             self._plot_tab.set_title(i, title)
             for i, title in enumerate(["Velocity", "Elevation Change"])
@@ -426,22 +445,10 @@ Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for
                                         self._add_button,
                                         self._clear_button,
                                         self._f_upload,
+                                        self._plot_button,
                                     ],
                                     layout=widgets.Layout(
                                         align_items="flex-start", flex_flow="row wrap"
-                                    ),
-                                ),
-                                self._dates_range,
-                                widgets.HBox(
-                                    [
-                                        self._plot_button,
-                                        self._variables,
-                                        self._plot_type,
-                                        self._include_running_mean,
-                                    ],
-                                    layout=widgets.Layout(
-                                        justify_content="flex-start",
-                                        flex_flow="row wrap",
                                     ),
                                 ),
                             ],
@@ -544,7 +551,7 @@ Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for
                 [last_points[0] + 5, last_points[1] + 5],
             ]
         )
-        self.map.zoom = 6
+        self.map.zoom = 5
 
     def add_point(self, point):
         color = plt.cm.tab10(self.icon_color_index)
