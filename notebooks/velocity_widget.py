@@ -49,20 +49,7 @@ class ITSLIVE:
         self.fig, self.fig_h = plt.figure(1), plt.figure(2)
         self.ax, self.ax_h = self.fig.add_subplot(111), self.fig_h.add_subplot(111)
 
-        self._initialize_widgets()
-
-        self.config = {
-            "plot": "v",
-            "min_separation_days": 5,
-            "max_separation_days": 90,
-            "color_by": "location",
-            "verbose": False,
-            "running_mean": False,
-            "coords": {"latitude": self._latitude, "longitude": self._longitude},
-            "data_link": self._data_link,
-            "title": None,
-            "instructions": None,
-        }
+        # self._initialize_widgets()
 
     def set_config(self, config):
         self.config = config
@@ -503,6 +490,19 @@ Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for
             ],
             layout=layout,
         )
+        self.config = {
+            "plot": "v",
+            "min_separation_days": 5,
+            "max_separation_days": 90,
+            "color_by": "location",
+            "verbose": False,
+            "running_mean": False,
+            "coords": {"latitude": self._latitude, "longitude": self._longitude},
+            "data_link": self._data_link,
+            "title": None,
+            "instructions": None,
+        }
+        self.set_config(self.config)
 
     def display(self, render_sidecar=False, mobile=True):
         if render_sidecar:
@@ -513,9 +513,13 @@ Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for
             self.sidecar.clear_output()
             with self.sidecar:
                 self._initialize_widgets(render_mobile=mobile)
+                self.set_config(self.config)
+                self.map.default_style = {"cursor": "crosshair"}
                 display(self.ui)
         else:
             self._initialize_widgets(render_mobile=mobile)
+            self.set_config(self.config)
+            self.map.default_style = {"cursor": "crosshair"}
             display(self.ui)
 
     # running mean
