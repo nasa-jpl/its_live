@@ -67,7 +67,7 @@ class ITSLIVE:
     def set_config(self, config):
         self.config = config
 
-    def _initialize_widgets(self, projection="global"):
+    def _initialize_widgets(self, projection="global", render_mobile=True):
         self._control_plot_running_mean_checkbox = ipywidgets.Checkbox(
             value=True,
             description="Include running mean",
@@ -376,38 +376,47 @@ class ITSLIVE:
             ),
         )
         self._plot_tab = widgets.Tab()
-        self._plot_tab.children = [
-            widgets.VBox(
-                [self._dates_range, self._velocity_controls, self.fig.canvas],
-                layout=widgets.Layout(
+        if render_mobile:
+            chart_layout = layout=widgets.Layout(
                     min_width="420px",
                     max_width="100%",
-                ),
+                    style= {'description_width': 'initial'}
+            ) 
+        else:
+             chart_layout = layout=widgets.Layout(
+                    min_width="720px",
+                    max_width="100%",
+                    style= {'description_width': 'initial'}
+            )
+                
+        
+        self._plot_tab.children = [
+            widgets.VBox(
+                [self._dates_range, self._velocity_controls, self.fig.canvas, widgets.HBox([self._export_button, self._data_link])],
+                layout=chart_layout,
             ),
-            self.fig_h.canvas,
+            widgets.VBox([self.fig_h.canvas], layout=chart_layout)
         ]
         [
             self._plot_tab.set_title(i, title)
-            for i, title in enumerate(["Velocity", "Elevation Change"])
+            for i, title in enumerate(["Velocity", "Elevation Change (Antarctica)"])
         ]
+        self._plot_tab.style = {'description_width': 'initial'}
 
-        if hasattr(self, "config"):
-            self._title = self.config["title"]
-            self._instructions = self.config["instructions"]
-        else:
-            html_title = markdown.markdown(
-                """
+
+        html_title = markdown.markdown(
+            """
 <div>
-    <h2><center><a href="https://its-live.jpl.nasa.gov/"><img align="middle" src="https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_logo.png" height="50"/></a></center></h2>
-    <h3><center>Global Glacier Velocity Point Data Access</center></h3>
+<h2><center><a href="https://its-live.jpl.nasa.gov/"><img align="middle" src="https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_logo.png" height="50"/></a></center></h2>
+<h3><center>Global Glacier Velocity Point Data Access</center></h3>
 </div>
 
 ***
 
 """
-            )
-            html_instructions = markdown.markdown(
-                """Click and drag on the map to pan the field of view. Select locations by double-clicking on the map then press Plot. Once plotted you can change the Variable that is being shown and how the markers are colored using Plot By. You can drag individual points after they are placed to relocate them, and then Plot again or Clear markers to start over.
+        )
+        html_instructions = markdown.markdown(
+            """Click and drag on the map to pan the field of view. Select locations by double-clicking on the map then press Plot. Once plotted you can change the Variable that is being shown and how the markers are colored using Plot By. You can drag individual points after they are placed to relocate them, and then Plot again or Clear markers to start over.
 You can also single-click on the map to populate the Lat and Lon boxes then add a point using the Add Point. Lat and Lon can also be edited manually.
 Hovering your cursor over the plot reveals tools to zoom, pan, and save the figure.
 
@@ -428,7 +437,7 @@ Check out the video tutorial if you're a visual learner:
 
 Data are Version 2 of the ITS_LIVE global glacier velocity dataset that provides up-to-date velocities from Sentinel-1, Sentinel-2, Landsat-8 and Landsat-9 data. Version 2 annual mosaics are coming soon, and will be followed by Landsat 7 and improved Landsat 9 velocities.
 Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for known issues, citation and other product information."""
-            )
+        )
         self._title = HTML(
             html_title,
             layout=widgets.Layout(width="100%", display="flex", align_items="stretch"),
@@ -483,7 +492,6 @@ Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for
                 widgets.VBox(
                     [
                         self._plot_tab,
-                        widgets.HBox([self._export_button, self._data_link]),
                     ],
                     layout=widgets.Layout(
                         min_width="420px",
@@ -496,7 +504,7 @@ Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for
             layout=layout,
         )
 
-    def display(self, render_sidecar=True):
+    def display(self, render_sidecar=False, mobile=True):
         if render_sidecar:
             from sidecar import Sidecar
 
@@ -504,9 +512,11 @@ Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for
                 self.sidecar = Sidecar(title="Map Widget")
             self.sidecar.clear_output()
             with self.sidecar:
-                display(self.map)
+                self._initialize_widgets(render_mobile=mobile)
+                display(self.ui)
         else:
-            display(self.map)
+            self._initialize_widgets(render_mobile=mobile)
+            display(self.ui)
 
     # running mean
     def runningMean(
