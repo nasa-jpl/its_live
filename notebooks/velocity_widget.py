@@ -419,7 +419,7 @@ class ITSLIVE:
             `70.3456,-45.0856`<br>
             `71.0763,-45.0235`<br>
             In order to have a clear plot no more than 20 points is adviced.
-            <b>Tip:/b> We can resize the plot by dragging the corner mark!
+            <b>Tip:</b> We can resize the plot by dragging the corner mark!
             Press Export Data to generate comma separated value (.csv) files of the data. Press Download Data to retrieve locally.
             Export Data must be pressed each time new data is requested.
             Data are Version 2 of the ITS_LIVE global glacier velocity dataset that provides up-to-date velocities from Sentinel-1, Sentinel-2, Landsat-8 and Landsat-9 data.
