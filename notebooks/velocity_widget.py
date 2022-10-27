@@ -151,10 +151,10 @@ class ITSLIVE:
         # Populating the map
 
         self.map.add_layer(self._map_picked_points_layer_group)
-        self.map.add_layer(self._map_velocity_layer)
         self.map.add_layer(self._map_coastlines_layer)
         self.map.add_layer(self._map_landmask_layer)
         self.map.add_layer(self._map_base_layer)
+        self.map.add_layer(self._map_velocity_layer)
         # wms = ipyleaflet.WMSLayer(url="https://integration.glims.org/geoserver/GLIMS/gwc/service",
         #                           name="GLIMS glacier outlines",
         #                           layers="GLIMS:GLIMS_GLACIERS",
@@ -364,73 +364,84 @@ class ITSLIVE:
         )
         self._plot_tab = widgets.Tab()
         if render_mobile:
-            chart_layout = layout=widgets.Layout(
-                    min_width="420px",
-                    max_width="100%",
-                    style= {'description_width': 'initial'}
-            ) 
-        else:
-             chart_layout = layout=widgets.Layout(
-                    min_width="720px",
-                    max_width="100%",
-                    style= {'description_width': 'initial'}
+            chart_layout = layout = widgets.Layout(
+                min_width="420px",
+                max_width="100%",
+                style={"description_width": "initial"},
             )
-                
-        
+        else:
+            chart_layout = layout = widgets.Layout(
+                min_width="720px",
+                max_width="100%",
+                style={"description_width": "initial"},
+            )
         self._plot_tab.children = [
             widgets.VBox(
-                [self._dates_range, self._velocity_controls, self.fig.canvas, widgets.HBox([self._export_button, self._data_link])],
+                [
+                    self._dates_range,
+                    self._velocity_controls,
+                    self.fig.canvas,
+                    widgets.HBox([self._export_button, self._data_link]),
+                ],
                 layout=chart_layout,
             ),
-            widgets.VBox([self.fig_h.canvas], layout=chart_layout)
+            widgets.VBox([self.fig_h.canvas], layout=chart_layout),
         ]
         [
             self._plot_tab.set_title(i, title)
             for i, title in enumerate(["Velocity", "Elevation Change (Antarctica)"])
         ]
-        self._plot_tab.style = {'description_width': 'initial'}
-
+        self._plot_tab.style = {"description_width": "initial"}
 
         html_title = markdown.markdown(
-            """
-<div>
-<h2><center><a href="https://its-live.jpl.nasa.gov/"><img align="middle" src="https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_logo.png" height="50"/></a></center></h2>
-<h3><center>Global Glacier Velocity Point Data Access</center></h3>
-</div>
-
+            """<div>
+                <h2>
+                  <center>
+                    <a href="https://its-live.jpl.nasa.gov/"><img align="middle" src="https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_logo.png" height="50"/></a>
+                  </center>
+                </h2>
+                <h3>
+                  <center>Global Glacier Velocity Point Data Access</center>
+                </h3>
+            </div>
 ***
-
 """
         )
         html_instructions = markdown.markdown(
-            """Click and drag on the map to pan the field of view. Select locations by double-clicking on the map then press Plot. Once plotted you can change the Variable that is being shown and how the markers are colored using Plot By. You can drag individual points after they are placed to relocate them, and then Plot again or Clear markers to start over.
-You can also single-click on the map to populate the Lat and Lon boxes then add a point using the Add Point. Lat and Lon can also be edited manually.
-Hovering your cursor over the plot reveals tools to zoom, pan, and save the figure.
-
-Importing coordinates: We can use a CSV file with lat, lon values and the tool will place them in the map ready to be plotted, the file should be in the following format:
-
-<br>
-<b>lat,lon</b><br>
-70.3456,-45.0856<br>
-71.0763,-45.0235<br>
-<br>
-
-In order to have a clear plot no more than 20 points is adviced.
-
-Press Export Data to generate comma separated value (.csv) files of the data. Press Download Data to retrieve locally. Export Data must be pressed each time new data is requested.
-Check out the video tutorial if you're a visual learner:
-
-<center><a href="https://www.youtube.com/watch?v=VYKsVvpVbmU" target="_blank"><img width="50%" src="https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_widget_youtube.jpg"></a></center>
-
-Data are Version 2 of the ITS_LIVE global glacier velocity dataset that provides up-to-date velocities from Sentinel-1, Sentinel-2, Landsat-8 and Landsat-9 data. Version 2 annual mosaics are coming soon, and will be followed by Landsat 7 and improved Landsat 9 velocities.
-Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for known issues, citation and other product information."""
+            """<table><tr>Click and drag on the map to pan the field of view. Select locations by double-clicking on the map then press Plot.
+            Once plotted you can change the Variable that is being shown and how the markers are colored using Plot By.
+            You can drag individual points after they are placed to relocate them, and then Plot again or Clear markers to start over.
+            You can also single-click on the map to populate the Lat and Lon boxes then add a point using the Add Point.
+            Lat and Lon can also be edited manually. Hovering your cursor over the plot reveals tools to zoom, pan, and save the figure.
+            Importing coordinates: We can use a CSV file with lat, lon values and the tool will place them in the map ready to be plotted.
+            The file should be in the following format:
+            <br>
+            `70.3456,-45.0856`<br>
+            `71.0763,-45.0235`<br>
+            In order to have a clear plot no more than 20 points is adviced.
+            <b>Tip:/b> We can resize the plot by dragging the corner mark!
+            Press Export Data to generate comma separated value (.csv) files of the data. Press Download Data to retrieve locally.
+            Export Data must be pressed each time new data is requested.
+            Data are Version 2 of the ITS_LIVE global glacier velocity dataset that provides up-to-date velocities from Sentinel-1, Sentinel-2, Landsat-8 and Landsat-9 data.
+            Version 2 annual mosaics are coming soon, and will be followed by Landsat 7 and improved Landsat 9 velocities.
+            Please refer to the <b><a href="https://its-live.jpl.nasa.gov/">project website</a></b> for known issues, citation and other product information."""
+        )
+        instructions_vid = markdown.markdown(
+            """<center>
+              <a href="https://www.youtube.com/watch?v=VYKsVvpVbmU" target="_blank">
+                <img width="280px" src="https://its-live-data.s3.amazonaws.com/documentation/ITS_LIVE_widget_youtube.jpg">
+              </a>
+            </center>
+            Check out the video tutorial if you're a visual learner"""
         )
         self._title = HTML(
             html_title,
             layout=widgets.Layout(width="100%", display="flex", align_items="stretch"),
         )
         self._instructions = widgets.Accordion(
-            children=[HTML(html_instructions)], selected_index=None
+            children=[widgets.HBox([HTML(html_instructions), HTML(instructions_vid)])],
+            selected_index=None,
+            layout=widgets.Layout(width="100%", display="flex", align_items="stretch"),
         )
         self._instructions.set_title(0, title="Instructions")
 
@@ -651,9 +662,9 @@ Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for
             "9": "Landsat 9",
         }
 
-        self.ax.set_xlabel("Date")
-        self.ax.set_ylabel("Speed (m/yr)")
-        self.ax.set_title("ITS_LIVE Ice Flow Speed m/yr")
+        # self.ax.set_xlabel("Date")
+        # self.ax.set_ylabel("Speed (m/yr)")
+        # self.ax.set_title("ITS_LIVE Ice Flow Speed m/yr")
 
         max_dt = self.config["max_separation_days"]
         min_dt = self.config["min_separation_days"]
@@ -909,7 +920,7 @@ Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for
                 self.plot_point_on_fig([lon, lat], "4326")
             if self.config["verbose"]:
                 print("done plotting")
-            plt.get_current_fig_manager().canvas.set_window_title("")
+            # plt.get_current_fig_manager().canvas.set_window_title("")
             self.ax.set_title("ITS_LIVE Ice Flow Speed m/yr")
             self.ax_h.set_title("ITS_LIVE Elevation Change (m)")
 
@@ -919,7 +930,6 @@ Please refer to the <b>[project website](https://its-live.jpl.nasa.gov/)</b> for
             self.fig_h.canvas.draw()
 
             self._control_plot_button.disabled = False
-            # plt.show()
         else:
             print("no picked points to plot yet - pick some!")
 
