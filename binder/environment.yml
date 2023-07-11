@@ -3,10 +3,8 @@ channels:
   - conda-forge
 dependencies:
   - python=3.9
-  - jupyterlab=3.3
-  - traitlets=5.0.5
+  - jupyterlab
   - fiona
-  - ipyleaflet
   - ipympl
   - matplotlib-base
   - pandas
@@ -18,3 +16,6 @@ dependencies:
   - markdown
   - voila
   - zarr
+  - pip
+  - pip:
+    - git+https://github.com/jupyter-widgets/ipyleaflet.git
