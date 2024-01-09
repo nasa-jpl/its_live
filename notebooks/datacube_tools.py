@@ -44,7 +44,7 @@ class DATACUBETOOLS:
         self.transformer_3031 = Transformer.from_crs(4326, 3031, always_xy=True)
 
         self.elevation_dataset = xr.open_dataset(
-            "s3://its-live-data/elevation/v01/ANT_G1920V01_GroundedIceHeight.zarr",
+            "s3://its-live-data/height_change/Antarctica/Grounded/ANT_G1920V01_GroundedIceHeight.zarr",
             engine="zarr",
             storage_options={"anon": True},
         )
