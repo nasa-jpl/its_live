@@ -3,7 +3,6 @@ import json
 import logging
 # for timing data access
 import time
-
 import numpy as np
 import pyproj
 import s3fs as s3
@@ -88,6 +87,7 @@ class DATACUBETOOLS:
 
         # create Shapely point object for inclusion test
         point = geometry.Point(*pointll)  # point.coords.xy
+        
 
         # find datacube outline that contains this point in geojson index file
         cubefeature = None
@@ -185,7 +185,13 @@ class DATACUBETOOLS:
                 )
                 newpointll = cubePROJtoLL.transform(*newpoint_cubexy)
 
-                # create Shapely point object for inclusion test
+                # # create Shapely point object for inclusion test
+                # newpoint = geometry.Point(*newpointll)
+
+                # Coordinates for the new point
+                newpointll = (40.7128, 74.0060)  # Replace with actual latitude and longitude values
+                
+                # Create Shapely point object
                 newpoint = geometry.Point(*newpointll)
 
                 # find datacube outline that contains this point in geojson index file
