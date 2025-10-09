@@ -2,7 +2,7 @@ name: itslive-notebooks
 channels:
   - conda-forge
 dependencies:
-  - python=3.9
+  - python=3.13
   - jupyterlab
   - fiona
   - ipympl
@@ -15,7 +15,6 @@ dependencies:
   - xarray
   - markdown
   - voila
-  - zarr
+  - zarr<3.0.0a
+  - ipyleaflet
   - pip
-  - pip:
-    - git+https://github.com/jupyter-widgets/ipyleaflet.git
